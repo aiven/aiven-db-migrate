@@ -1,0 +1,9 @@
+*~
+.pyc
+.cache/
+.mypy_cache/
+.pytest_cache/
+__pycache__
+/aiven_db_migrate.egg-info
+/aiven/migrate/version.py
+/build
