@@ -83,6 +83,7 @@ class PGCluster:
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
+        self.db_lock = threading.Lock()
         self._databases = dict()
         self._params = dict()
         self._version = None
@@ -160,31 +161,30 @@ class PGCluster:
             self._attributes = self.c("SELECT * FROM pg_catalog.pg_roles where rolname = current_user", return_rows=1)[0]
         return self._attributes
 
+    def _set_db(self, *, dbname: str) -> List[PGExtension]:
+        try:
+            exts = self.c("SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname)
+            pg_ext = [PGExtension(name=e["name"], version=e["version"]) for e in exts]
+            try:
+                next(e for e in pg_ext if e.name == "aiven_extras")
+            except StopIteration:
+                has_aiven_extras = False
+            else:
+                has_aiven_extras = True
+            self._databases[dbname] = PGDatabase(dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras)
+        except psycopg2.OperationalError as err:
+            self.log.warning("Couldn't connect to database %r: %r", dbname, err)
+            self._databases[dbname] = PGDatabase(dbname=dbname, error=err)
+        return []
+
     @property
     def databases(self) -> Dict[str, PGDatabase]:
-        if not self._databases:
-            dbs = self.c("SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ('template0', 'template1')")
-            for db in dbs:
-                dbname = db["datname"]
-                try:
-                    # get extensions which are installed in this db
-                    exts = self.c(
-                        "SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname
-                    )
-                    pg_ext = [PGExtension(name=e["name"], version=e["version"]) for e in exts]
-                except psycopg2.OperationalError as err:
-                    self.log.warning("Couldn't connect to database %r: %r", dbname, err)
-                    self._databases[dbname] = PGDatabase(dbname=dbname, error=err)
-                else:
-                    # check if aiven-extras is installed
-                    try:
-                        next(e for e in pg_ext if e.name == "aiven_extras")
-                    except StopIteration:
-                        has_aiven_extras = False
-                    else:
-                        has_aiven_extras = True
-                    self._databases[dbname] = PGDatabase(dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras)
-        return self._databases
+        with self.db_lock:
+            if not self._databases:
+                dbs = self.c("SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ('template0', 'template1')")
+                for db in dbs:
+                    self._set_db(dbname=db["datname"])
+            return self._databases
 
     @property
     def pg_ext(self) -> List[PGExtension]:
@@ -273,6 +273,13 @@ class PGCluster:
         """Check if aiven_extras extension is installed in database"""
         if dbname in self.databases:
             return self.databases[dbname].has_aiven_extras
+        return False
+
+    def refresh_db(self, *, dbname: str) -> bool:
+        if dbname in self.databases:
+            with self.db_lock:
+                self._set_db(dbname=dbname)
+            return True
         return False
 
 
@@ -858,6 +865,7 @@ class PGMigrate:
         return PGMigrateStatus.running
 
     def _db_migrate(self, *, pgtask: PGMigrateTask) -> PGMigrateStatus:
+        """Migrate, executes in thread"""
         if pgtask.source_db.error:
             raise pgtask.source_db.error
         if pgtask.target_db and pgtask.target_db.error:
@@ -865,6 +873,8 @@ class PGMigrate:
 
         dbname: str = pgtask.source_db.dbname
         self._dump_schema(dbname=dbname)
+        # refresh db since aiven-extras might have been installed now in target db
+        self.target.refresh_db(dbname=dbname)
         if self.source.replication_available:
             pgtask.method = PGMigrateMethod.replication
             try:

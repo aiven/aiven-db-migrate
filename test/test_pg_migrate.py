@@ -1,7 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
 from aiven.migrate.errors import PGMigrateValidationFailedError
-from aiven.migrate.pgmigrate import PGDatabase, PGMigrate, PGMigrateResult
+from aiven.migrate.pgmigrate import PGMigrate, PGMigrateResult
 from test.conftest import PGRunner
 from test.utils import random_string, Timer
 from typing import Any, Dict
@@ -272,9 +272,16 @@ class Test_PGMigrate_Replication(PGMigrateTest):
             cur.execute(f"CREATE TABLE {tblname} (something INT)")
             cur.execute(f"INSERT INTO {tblname} VALUES (1), (2), (3)")
 
+        # whitelist aiven-extras in target
+        extnames = {"aiven_extras", "dblink"}
+        self.target.make_conf(**{"extwlist.extensions": "'{}'".format(",".join(extnames))}).reload()
+
         if not createdb:
             # create existing db to target
             self.target.create_db(dbname=dbname)
+            expected_method = "replication"
+        else:
+            expected_method = "dump"
 
         pg_mig = PGMigrate(
             source_conn_info=self.source.conn_info(),
@@ -284,19 +291,23 @@ class Test_PGMigrate_Replication(PGMigrateTest):
             verbose=True
         )
 
-        # mock source database with no extensions so that we don't try to install aiven-extras in target
-        setattr(pg_mig.source, "_databases", {dbname: PGDatabase(dbname=dbname, has_aiven_extras=True)})
-
         result: PGMigrateResult = pg_mig.migrate()
 
-        assert len(result.pg_databases) == 1
+        assert len(result.pg_databases) == 2
         self.assert_result(
             result=result.pg_databases[dbname],
             dbname=dbname,
-            method="dump",
+            method=expected_method,
             message="created and migrated database" if createdb else "migrated to existing database"
         )
         self.wait_until_data_migrated(pg_mig=pg_mig, dbname=dbname, tblname=tblname, count=3)
+        # default db
+        self.assert_result(
+            result=result.pg_databases["postgres"],
+            dbname="postgres",
+            method="dump",
+            message="migrated to existing database"
+        )
 
         # verify that there's no leftovers
         assert not self.source.list_pubs(dbname=dbname)
@@ -334,9 +345,11 @@ class Test_PGMigrate_Replication(PGMigrateTest):
         )
         self.wait_until_data_migrated(pg_mig=pg_mig, dbname=dbname, tblname=tblname, count=3)
         # default db
-        dbname = "postgres"
         self.assert_result(
-            result=result.pg_databases[dbname], dbname=dbname, method="dump", message="migrated to existing database"
+            result=result.pg_databases["postgres"],
+            dbname="postgres",
+            method="dump",
+            message="migrated to existing database"
         )
 
         # verify that there's no leftovers
