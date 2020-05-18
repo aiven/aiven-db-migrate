@@ -81,8 +81,8 @@ Databases:
   dbaname: 'defaultdb', method: 'replication', status: 'running', message: 'migrated to existing database'
 ```
 
-By default logical replication is left running and the created pub/sub objects need to be cleaned up once work
-loads have been moved to the new server. Objects created by this tool are named like `aiven_db_migrate_<dbname>_<sub|pub|slot>`.
+By default logical replication is left running and the created pub/sub objects need to be cleaned up once workloads have been
+moved to the new server. Objects created by this tool are named like `aiven_db_migrate_<dbname>_<sub|pub|slot>`.
 
 Starting from the target (using `aiven-extras` extension), get first the subscription name:
 ```
@@ -112,6 +112,9 @@ defaultdb=> SELECT * FROM pg_drop_replication_slot('aiven_db_migrate_defaultdb_s
 
 Using `--wait-until-replication-in-sync` waits until replication is in sync and then cleans up all created
 pub/sub objects.
+
+With `--validate` only best effort validation is run. This checks e.g. PL/pgSQL languages, extensions etc. installed
+in source are also installed/available in target.
 
 ### API example
 
@@ -202,6 +205,7 @@ $ PG_SOURCE_VERSION="10" PG_TARGET_VERSION="12" python3 -m pytest -s test/test_p
    * --dump-only, --repl-only
    * --include-databases, --exclude-databases
    * --include-tables, --exclude-tables
+   * --role-passwords (role/passwords file for creating roles with real passwords instead of placeholders)
  * More tests
    * Notably error/corner cases
  * Schema changes break logical replication
@@ -210,4 +214,4 @@ $ PG_SOURCE_VERSION="10" PG_TARGET_VERSION="12" python3 -m pytest -s test/test_p
    * How to continue if schema has changed? Stop replication, dump schema and restart replication?
  * Proper README + API doc
  * RPM build recipe for aiven-core/prune integration
- * Test automation: j27 Jenkins/Github Actions
+ * Test automation: Jenkins/Github Actions
