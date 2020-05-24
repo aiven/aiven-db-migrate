@@ -107,7 +107,6 @@ class PGCluster:
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
         if dbname:
             conn_info["dbname"] = dbname
-        self.log.debug("Connecting: %r", conn_info)
         # we are modifying global objects (pg_catalog.pg_subscription, pg_catalog.pg_replication_slots)
         # from multiple threads; allow only one connection at time
         self.conn_lock.acquire()
@@ -781,8 +780,6 @@ class PGMigrate:
             # "--variable=ON_ERROR_STOP=1",
             target_conn_str,
         ]
-        self.log.debug("pg_dump cmd: %r", pg_dump_cmd)
-        self.log.debug("psql cmd: %r", psql_cmd)
         # https://docs.python.org/3.7/library/subprocess.html#replacing-shell-pipeline
         pg_dump = subprocess.Popen(pg_dump_cmd, stdout=subprocess.PIPE)
         psql = subprocess.Popen(psql_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE)
@@ -957,7 +954,6 @@ class PGMigrate:
         pg_roles: Dict[str, PGRoleTask] = self._migrate_roles()
         r: PGRoleTask
         for r in pg_roles.values():
-            self.log.debug(repr(r))
             result.pg_roles[r.rolname] = r.result()
 
         tasks: Dict[futures.Future, PGMigrateTask] = {}
@@ -975,7 +971,6 @@ class PGMigrate:
 
         t: PGMigrateTask
         for t in tasks.values():
-            self.log.debug(repr(t))
             result.pg_databases[t.source_db.dbname] = t.result()
 
         return result
@@ -1011,7 +1006,6 @@ def main(args=None, *, prog="pg_migrate"):
     else:
         logging.basicConfig(level=logging.INFO, format=log_format)
 
-    # log = logging.getLogger(prog)
     pg_mig = PGMigrate(
         source_conn_info=args.source,
         target_conn_info=args.target,
