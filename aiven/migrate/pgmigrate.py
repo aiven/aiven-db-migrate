@@ -281,6 +281,10 @@ class PGCluster:
             return True
         return False
 
+    @staticmethod
+    def in_sync(replication_lag: Optional[int], max_replication_lag: int) -> bool:
+        return replication_lag <= max_replication_lag if replication_lag is not None else False
+
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
@@ -355,7 +359,7 @@ class PGSource(PGCluster):
         )
         return result[0] if result else {}
 
-    def replication_in_sync(self, *, dbname: str, slotname: str) -> Tuple[bool, str]:
+    def replication_in_sync(self, *, dbname: str, slotname: str, max_replication_lag: int) -> Tuple[bool, str]:
         exists = self.c(
             f"SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
         )
@@ -371,10 +375,10 @@ class PGSource(PGCluster):
         status = self.c(
             f"""
             SELECT stat.pid, stat.client_addr, stat.state, stat.sync_state, stat.write_lsn,
-                (pg_current_wal_lsn() = stat.write_lsn) AS in_sync,
-                pg_wal_lsn_diff(sent_lsn, stat.write_lsn) AS write_lag,
-                pg_wal_lsn_diff(sent_lsn, stat.flush_lsn) AS flush_lag,
-                pg_wal_lsn_diff(sent_lsn, stat.replay_lsn) AS replay_lag
+                pg_wal_lsn_diff(pg_current_wal_lsn(), stat.write_lsn)::BIGINT AS replication_lag,
+                pg_wal_lsn_diff(sent_lsn, stat.write_lsn)::BIGINT AS write_lag,
+                pg_wal_lsn_diff(sent_lsn, stat.flush_lsn)::BIGINT AS flush_lag,
+                pg_wal_lsn_diff(sent_lsn, stat.replay_lsn)::BIGINT AS replay_lag
             FROM {schema}.pg_stat_replication stat
             JOIN pg_catalog.pg_replication_slots slot ON (stat.pid = slot.active_pid)
             WHERE slot.slot_name = %s
@@ -384,7 +388,7 @@ class PGSource(PGCluster):
         )
         if status:
             self.log.info("Replication status for slot %r in database %r: %r", slotname, dbname, status[0])
-            return status[0]["in_sync"], status[0]["write_lsn"]
+            return self.in_sync(status[0]["replication_lag"], max_replication_lag), status[0]["write_lsn"]
 
         self.log.warning("Replication status not available for %r in database %r", slotname, dbname)
         return False, ""
@@ -456,15 +460,18 @@ class PGTarget(PGCluster):
             result = self.c("SELECT * FROM pg_catalog.pg_subscription WHERE subname = %s", args=(subname, ), dbname=dbname)
         return result[0] if result else {}
 
-    def replication_in_sync(self, *, dbname: str, subname: str, write_lsn: str) -> bool:
+    def replication_in_sync(self, *, dbname: str, subname: str, write_lsn: str, max_replication_lag: int) -> bool:
         status = self.c(
             f"""
             SELECT stat.*,
-            (stat.received_lsn = '{write_lsn}') AS in_sync
+            pg_wal_lsn_diff(stat.received_lsn, %s)::BIGINT AS replication_lag
             FROM pg_catalog.pg_stat_subscription stat
             WHERE subname = %s
             """,
-            args=(subname, ),
+            args=(
+                write_lsn,
+                subname,
+            ),
             dbname=dbname
         )
         if status:
@@ -472,7 +479,7 @@ class PGTarget(PGCluster):
                 "Replication status for subscription %r in database %r: %r, write_lsn: %r", subname, dbname, status[0],
                 write_lsn
             )
-            return status[0]["in_sync"]
+            return self.in_sync(status[0]["replication_lag"], max_replication_lag)
 
         self.log.warning("Replication status not available for %r in database %r", subname, dbname)
         return False
@@ -593,7 +600,8 @@ class PGMigrate:
     pgbin: Path
     createdb: bool
     max_workers: int
-    wait_until_replication_in_sync: bool
+    max_replication_lag: int
+    stop_replication: bool
     verbose: bool
 
     def __init__(
@@ -603,8 +611,8 @@ class PGMigrate:
         target_conn_info: Union[str, Dict[str, Any]],
         createdb: bool = True,
         max_workers: int = DEFAULT_MAX_WORKERS,
-        # only effective when using logical replication
-        wait_until_replication_in_sync: bool = False,
+        max_replication_lag: int = -1,
+        stop_replication: bool = False,
         verbose: bool = False
     ):
         self.log = logging.getLogger(self.__class__.__name__)
@@ -615,7 +623,8 @@ class PGMigrate:
         self.createdb = createdb
         # TODO: have "--max-workers" in CLI
         self.max_workers = max_workers
-        self.wait_until_replication_in_sync = wait_until_replication_in_sync
+        self.max_replication_lag = max_replication_lag
+        self.stop_replication = stop_replication
         self.verbose = verbose
 
     def _check_databases(self):
@@ -832,8 +841,12 @@ class PGMigrate:
 
     def _wait_for_replication(self, *, dbname: str, slotname: str, subname: str, check_interval: float = 2.0):
         while True:
-            in_sync, write_lsn = self.source.replication_in_sync(dbname=dbname, slotname=slotname)
-            if in_sync and self.target.replication_in_sync(dbname=dbname, subname=subname, write_lsn=write_lsn):
+            in_sync, write_lsn = self.source.replication_in_sync(
+                dbname=dbname, slotname=slotname, max_replication_lag=self.max_replication_lag
+            )
+            if in_sync and self.target.replication_in_sync(
+                dbname=dbname, subname=subname, write_lsn=write_lsn, max_replication_lag=self.max_replication_lag
+            ):
                 break
             time.sleep(check_interval)
 
@@ -853,8 +866,9 @@ class PGMigrate:
             raise
 
         self.log.info("Logical replication setup successful for database %r", dbname)
-        if self.wait_until_replication_in_sync:
+        if self.max_replication_lag > -1:
             self._wait_for_replication(dbname=dbname, slotname=slotname, subname=subname)
+        if self.stop_replication:
             self.target.cleanup(dbname=dbname, subname=subname)
             self.source.cleanup(dbname=dbname, pubname=pubname, slotname=slotname)
             return PGMigrateStatus.done
@@ -897,6 +911,8 @@ class PGMigrate:
           in target
         """
         try:
+            if self.stop_replication and self.max_replication_lag < 0:
+                raise PGMigrateValidationFailedError("Stopping replication requires also '--max-replication-lag' >= 0")
             if (
                 self.source.conn_info["host"] == self.target.conn_info["host"]
                 and self.source.conn_info["port"] == self.target.conn_info["port"]
@@ -981,23 +997,33 @@ def main(args=None, *, prog="pg_migrate"):
     import argparse
 
     parser = argparse.ArgumentParser(description="PostgreSQL migration tool.", prog=prog)
-    parser.add_argument("-d", "--debug", action="store_true", help="debug logging")
+    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging.")
     parser.add_argument(
-        "-s", "--source", help="source PostgreSQL server, either postgres:// uri or libpq connection string", required=True
+        "-s", "--source", help="Source PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
     )
     parser.add_argument(
-        "-t", "--target", help="target PostgreSQL server, either postgres:// uri or libpq connection string", required=True
+        "-t", "--target", help="Target PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="verbose output")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
     parser.add_argument(
-        "--no-createdb", action="store_false", dest="createdb", help="don't automatically create database(s) in target"
+        "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
     )
     parser.add_argument(
-        "--wait-until-replication-in-sync",
+        "--max-replication-lag",
+        type=int,
+        default=-1,
+        help="Max replication lag in bytes to wait for, by default no wait (no effect when replication isn't available)."
+    )
+    parser.add_argument(
+        "--stop-replication",
         action="store_true",
-        help="wait until logical replication in sync (no effect when replication isn't available)"
+        help=(
+            "Stop replication, by default replication is left running (no effect when replication isn't available)."
+            " Requires also '--max-replication-lag' >= 0, i.e. wait until replication lag in bytes is less than/equal"
+            " to given max replication lag and then stop replication."
+        )
     )
-    parser.add_argument("--validate", action="store_true", help="run only best effort validation")
+    parser.add_argument("--validate", action="store_true", help="Run only best effort validation.")
     args = parser.parse_args(args)
 
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1010,7 +1036,8 @@ def main(args=None, *, prog="pg_migrate"):
         source_conn_info=args.source,
         target_conn_info=args.target,
         createdb=args.createdb,
-        wait_until_replication_in_sync=args.wait_until_replication_in_sync,
+        max_replication_lag=args.max_replication_lag,
+        stop_replication=args.stop_replication,
         verbose=args.verbose
     )
     if args.validate:

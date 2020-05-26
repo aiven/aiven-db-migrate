@@ -79,7 +79,8 @@ class PGMigrateTest:
             source_conn_info=source_conn_info,
             target_conn_info=target_conn_info,
             createdb=createdb,
-            wait_until_replication_in_sync=True,
+            max_replication_lag=0,
+            stop_replication=True,
             verbose=True
         )
 
@@ -287,7 +288,8 @@ class Test_PGMigrate_Replication(PGMigrateTest):
             source_conn_info=self.source.conn_info(),
             target_conn_info=self.target.conn_info(),
             createdb=createdb,
-            wait_until_replication_in_sync=True,
+            max_replication_lag=0,
+            stop_replication=True,
             verbose=True
         )
 
@@ -333,7 +335,8 @@ class Test_PGMigrate_Replication(PGMigrateTest):
             source_conn_info=self.source.conn_info(),
             target_conn_info=self.target.conn_info(),
             createdb=False,
-            wait_until_replication_in_sync=True,
+            max_replication_lag=0,
+            stop_replication=True,
             verbose=True
         )
 

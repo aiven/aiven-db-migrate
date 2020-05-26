@@ -110,8 +110,8 @@ defaultdb=> SELECT * FROM pg_replication_slots;
 defaultdb=> SELECT * FROM pg_drop_replication_slot('aiven_db_migrate_defaultdb_slot');
 ```
 
-Using `--wait-until-replication-in-sync` waits until replication is in sync and then cleans up all created
-pub/sub objects.
+Using `--max-replication-lag` waits until replication lag in bytes is less than/equal to given max replication lag. This
+can be used together with `--stop-replication` to clean up all created pub/sub objects when replication is done.
 
 With `--validate` only best effort validation is run. This checks e.g. PL/pgSQL languages, extensions etc. installed
 in source are also installed/available in target.

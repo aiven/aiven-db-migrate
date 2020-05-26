@@ -69,8 +69,10 @@ def test_replication(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]
     # wait until replication is in sync
     timer = Timer(timeout=10, what="replication in sync")
     while timer.loop():
-        in_sync, write_lsn = pg_source.replication_in_sync(dbname=dbname, slotname=slotname)
-        if in_sync and pg_target.replication_in_sync(dbname=dbname, subname=subname, write_lsn=write_lsn):
+        in_sync, write_lsn = pg_source.replication_in_sync(dbname=dbname, slotname=slotname, max_replication_lag=0)
+        if in_sync and pg_target.replication_in_sync(
+            dbname=dbname, subname=subname, write_lsn=write_lsn, max_replication_lag=0
+        ):
             break
 
     # verify that all data has been replicated
