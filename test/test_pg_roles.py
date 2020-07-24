@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven.migrate.pgmigrate import PGMigrate, PGMigrateResult
+from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult
 from datetime import datetime
 from test.conftest import PGRunner
 from test.utils import random_string

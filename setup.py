@@ -7,7 +7,7 @@ import sys
 
 
 def get_version():
-    return SourceFileLoader("version", "aiven/migrate/version.py").load_module().__version__
+    return SourceFileLoader("version", "aiven_db_migrate/migrate/version.py").load_module().__version__
 
 
 setup(
@@ -15,7 +15,7 @@ setup(
     author_email="support@aiven.io",
     entry_points={
         "console_scripts": [
-            "pg_migrate = aiven.migrate.pgmigrate:main",
+            "pg_migrate = aiven_db_migrate.migrate.pgmigrate:main",
         ],
     },
     install_requires=[

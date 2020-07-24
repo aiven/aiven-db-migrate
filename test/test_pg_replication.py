@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven.migrate.pgmigrate import PGSource, PGTarget
+from aiven_db_migrate.migrate.pgmigrate import PGSource, PGTarget
 from test.conftest import PGRunner
 from test.utils import random_string, Timer
 from typing import Tuple

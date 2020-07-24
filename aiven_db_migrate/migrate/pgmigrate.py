@@ -1,12 +1,12 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven.migrate.errors import (
+from aiven_db_migrate.migrate.errors import (
     PGDataDumpFailedError, PGDataNotFoundError, PGMigrateValidationFailedError, PGSchemaDumpFailedError, PGTooMuchDataError
 )
-from aiven.migrate.pgutils import (
+from aiven_db_migrate.migrate.pgutils import (
     create_connection_string, find_pgbin_dir, get_connection_info, validate_pg_identifier_length
 )
-from aiven.migrate.version import __version__
+from aiven_db_migrate.migrate.version import __version__
 from concurrent import futures
 from contextlib import contextmanager, suppress
 from copy import deepcopy
@@ -288,7 +288,6 @@ class PGCluster:
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
-
     def create_publication(self, *, dbname: str) -> str:
         pubname = f"aiven_db_migrate_{dbname}_pub"
         validate_pg_identifier_length(pubname)
@@ -412,7 +411,6 @@ class PGSource(PGCluster):
 
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
-
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
         subname = f"aiven_db_migrate_{dbname}_sub"
         validate_pg_identifier_length(subname)

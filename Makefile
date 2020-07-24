@@ -1,14 +1,14 @@
 
 PYTHON ?= python3
-PYTHON_SOURCE_DIRS = aiven/ test/
+PYTHON_SOURCE_DIRS = aiven_db_migrate/ test/
 PG_VERSIONS = 95 96 10 11 12
 
-generated = aiven/migrate/version.py
+generated = aiven_db_migrate/migrate/version.py
 
 
 all: $(generated)
 
-aiven/migrate/version.py:
+aiven_db_migrate/migrate/version.py:
 	echo "__version__ = \"$(shell git describe)\"" > $@
 
 build-dep-fedora:
@@ -54,4 +54,4 @@ test: $(generated)
 	$(PYTHON) -m pytest -v -r test
 
 clean:
-	$(RM) aiven/migrate/version.py
+	$(RM) aiven_db_migrate/migrate/version.py
