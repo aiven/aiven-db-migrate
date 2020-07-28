@@ -33,7 +33,6 @@ import time
 # https://www.psycopg.org/docs/faq.html#faq-interrupt-query
 psycopg2.extensions.set_wait_callback(psycopg2.extras.wait_select)
 
-
 @dataclass
 class PGExtension:
     name: str
@@ -79,7 +78,7 @@ class PGCluster:
     _pg_lang: Optional[List[Dict[str, Any]]]
     _pg_roles: Dict[str, PGRole]
 
-    def __init__(self, conn_info: Union[str, Dict[str, Any]]):
+    def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None):
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
@@ -92,6 +91,9 @@ class PGCluster:
         self._pg_ext_whitelist = None
         self._pg_lang = None
         self._pg_roles = dict()
+        if filtered_db:
+            filtered_db = filtered_db.split(",")
+        self.filtered_db = filtered_db
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
 
@@ -99,6 +101,7 @@ class PGCluster:
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
         if dbname:
             conn_info["dbname"] = dbname
+        conn_info["application_name"] = conn_info["application_name"] + "/" + conn_info["dbname"]
         return create_connection_string(conn_info)
 
     @contextmanager
@@ -160,7 +163,13 @@ class PGCluster:
             self._attributes = self.c("SELECT * FROM pg_catalog.pg_roles where rolname = current_user", return_rows=1)[0]
         return self._attributes
 
-    def _set_db(self, *, dbname: str) -> List[PGExtension]:
+    def _set_db(self, *, dbname: str, with_extras: bool = False) -> List[PGExtension]:
+        # try to install aiven_extras and fail silently
+        if with_extras:
+            try:
+                self.c("CREATE EXTENSION aiven_extras CASCADE", dbname=dbname)
+            except psycopg2.ProgrammingError as e:
+                self.log.info(e)
         try:
             exts = self.c("SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname)
             pg_ext = [PGExtension(name=e["name"], version=e["version"]) for e in exts]
@@ -178,10 +187,14 @@ class PGCluster:
 
     @property
     def databases(self) -> Dict[str, PGDatabase]:
+        filtered = ["template0", "template1"]
+        if self.filtered_db:
+            filtered.extend(self.filtered_db)
+        db_list = ','.join(f"'{db}'" for db in filtered)
         with self.db_lock:
-            if not self._databases:
-                dbs = self.c("SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ('template0', 'template1')")
-                for db in dbs:
+            dbs = self.c(f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_list})")
+            for db in dbs:
+                if db["datname"] not in self._databases:
                     self._set_db(dbname=db["datname"])
             return self._databases
 
@@ -277,7 +290,7 @@ class PGCluster:
     def refresh_db(self, *, dbname: str) -> bool:
         if dbname in self.databases:
             with self.db_lock:
-                self._set_db(dbname=dbname)
+                self._set_db(dbname=dbname, with_extras=True)
             return True
         return False
 
@@ -611,11 +624,12 @@ class PGMigrate:
         max_workers: int = DEFAULT_MAX_WORKERS,
         max_replication_lag: int = -1,
         stop_replication: bool = False,
-        verbose: bool = False
+        verbose: bool = False,
+        filtered_db: Optional[str] = None,
     ):
         self.log = logging.getLogger(self.__class__.__name__)
-        self.source = PGSource(conn_info=source_conn_info)
-        self.target = PGTarget(conn_info=target_conn_info)
+        self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db)
+        self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db)
         self.pgbin = Path()
         # include commands to create db in pg_dump output
         self.createdb = createdb
@@ -882,7 +896,6 @@ class PGMigrate:
 
         dbname: str = pgtask.source_db.dbname
         self._dump_schema(dbname=dbname)
-        # refresh db since aiven-extras might have been installed now in target db
         self.target.refresh_db(dbname=dbname)
         if self.source.replication_available:
             pgtask.method = PGMigrateMethod.replication
@@ -1002,6 +1015,9 @@ def main(args=None, *, prog="pg_migrate"):
     parser.add_argument(
         "-t", "--target", help="Target PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
     )
+    parser.add_argument(
+        "-f", "--filtered-db", help="Comma separated list of databases to filter out during migrations", required=False
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
     parser.add_argument(
         "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
@@ -1036,7 +1052,8 @@ def main(args=None, *, prog="pg_migrate"):
         createdb=args.createdb,
         max_replication_lag=args.max_replication_lag,
         stop_replication=args.stop_replication,
-        verbose=args.verbose
+        verbose=args.verbose,
+        filtered_db=args.filtered_db
     )
     if args.validate:
         pg_mig.validate()
