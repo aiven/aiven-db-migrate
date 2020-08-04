@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven.migrate.pgutils import find_pgbin_dir, validate_pg_identifier_length
+from aiven_db_migrate.migrate.pgutils import find_pgbin_dir, validate_pg_identifier_length
 from test.utils import random_string
 
 import pytest

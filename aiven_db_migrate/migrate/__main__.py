@@ -9,6 +9,7 @@ def pg(args_):
 
 if __name__ == "__main__":
     from typing import Optional
+
     import sys
 
     commands = ("pg", )
