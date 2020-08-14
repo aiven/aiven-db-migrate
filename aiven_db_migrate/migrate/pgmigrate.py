@@ -96,9 +96,6 @@ class PGCluster:
         self._pg_roles = dict()
         if filtered_db:
             filtered_db = filtered_db.split(",")
-            for f in filtered_db:
-                if not f.isalnum():
-                    raise ValueError(f"Not a valid DB name: {f}")
         self.filtered_db = filtered_db
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
@@ -108,7 +105,7 @@ class PGCluster:
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
         if dbname:
             conn_info["dbname"] = dbname
-        conn_info["application_name"] = conn_info["application_name"] + "/" + conn_info["dbname"]
+        conn_info["application_name"] = conn_info["application_name"] + "/" + self.mangle_db_name(conn_info["dbname"])
         return create_connection_string(conn_info)
 
     @contextmanager
@@ -645,8 +642,8 @@ class PGMigrate:
         filtered_db: Optional[str] = None,
     ):
         self.log = logging.getLogger(self.__class__.__name__)
-        self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db)
-        self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db)
+        self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db, mangle=mangle)
+        self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
         self.pgbin = Path()
         # include commands to create db in pg_dump output
         self.createdb = createdb
