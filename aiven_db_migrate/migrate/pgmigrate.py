@@ -18,6 +18,7 @@ from psycopg2.extras import RealDictCursor
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import enum
+import hashlib
 import logging
 import os
 import psycopg2
@@ -78,8 +79,9 @@ class PGCluster:
     _pg_ext_whitelist: Optional[List[str]]
     _pg_lang: Optional[List[Dict[str, Any]]]
     _pg_roles: Dict[str, PGRole]
+    _mangle: bool
 
-    def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None):
+    def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None, mangle: bool = False):
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
@@ -100,6 +102,7 @@ class PGCluster:
         self.filtered_db = filtered_db
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
+        self._mangle = mangle
 
     def conn_str(self, *, dbname: str = None) -> str:
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
@@ -302,11 +305,17 @@ class PGCluster:
     def in_sync(replication_lag: Optional[int], max_replication_lag: int) -> bool:
         return replication_lag <= max_replication_lag if replication_lag is not None else False
 
+    def mangle_db_name(self, db_name: str) -> str:
+        if not self._mangle:
+            return db_name
+        return hashlib.md5(db_name.encode()).hexdigest()
+
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
     def create_publication(self, *, dbname: str) -> str:
-        pubname = f"aiven_db_migrate_{dbname}_pub"
+        mangled_name = self.mangle_db_name(dbname)
+        pubname = f"aiven_db_migrate_{mangled_name}_pub"
         validate_pg_identifier_length(pubname)
 
         pub_options: Union[List[str], str]
@@ -342,7 +351,8 @@ class PGSource(PGCluster):
         return pubname
 
     def create_replication_slot(self, *, dbname: str) -> str:
-        slotname = f"aiven_db_migrate_{dbname}_slot"
+        mangled_name = self.mangle_db_name(dbname)
+        slotname = f"aiven_db_migrate_{mangled_name}_slot"
         validate_pg_identifier_length(slotname)
 
         self.log.info("Creating replication slot %r in database %r", slotname, dbname)
@@ -429,7 +439,8 @@ class PGSource(PGCluster):
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
-        subname = f"aiven_db_migrate_{dbname}_sub"
+        mangled_name = self.mangle_db_name(dbname)
+        subname = f"aiven_db_migrate_{mangled_name}_sub"
         validate_pg_identifier_length(subname)
 
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
@@ -618,6 +629,7 @@ class PGMigrate:
     max_replication_lag: int
     stop_replication: bool
     verbose: bool
+    mangle: bool
 
     def __init__(
         self,
@@ -629,6 +641,7 @@ class PGMigrate:
         max_replication_lag: int = -1,
         stop_replication: bool = False,
         verbose: bool = False,
+        mangle: bool = False,
         filtered_db: Optional[str] = None,
     ):
         self.log = logging.getLogger(self.__class__.__name__)
@@ -642,6 +655,7 @@ class PGMigrate:
         self.max_replication_lag = max_replication_lag
         self.stop_replication = stop_replication
         self.verbose = verbose
+        self.mangle = mangle
 
     def _check_databases(self):
         for db in self.source.databases.values():
@@ -1027,6 +1041,11 @@ def main(args=None, *, prog="pg_migrate"):
         "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
     )
     parser.add_argument(
+        "-m", "--mangle",
+        action="store_true",
+        help="Mangle the DB name for the purpose of having a predictible identifier len",
+    )
+    parser.add_argument(
         "--max-replication-lag",
         type=int,
         default=-1,
@@ -1057,7 +1076,8 @@ def main(args=None, *, prog="pg_migrate"):
         max_replication_lag=args.max_replication_lag,
         stop_replication=args.stop_replication,
         verbose=args.verbose,
-        filtered_db=args.filtered_db
+        filtered_db=args.filtered_db,
+        mangle=args.mangle,
     )
     if args.validate:
         pg_mig.validate()
