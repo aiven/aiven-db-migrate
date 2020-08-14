@@ -49,6 +49,8 @@ validate-style:
 	diff $(CHANGES_BEFORE) $(CHANGES_AFTER)
 	-rm $(CHANGES_BEFORE) $(CHANGES_AFTER)
 
+lint: validate-style static-checks
+
 .PHONY: test
 test: $(generated)
 	$(PYTHON) -m pytest -v -r test

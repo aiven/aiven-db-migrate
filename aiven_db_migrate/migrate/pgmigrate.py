@@ -92,12 +92,13 @@ class PGCluster:
         self._pg_ext_whitelist = None
         self._pg_lang = None
         self._pg_roles = dict()
+        filtered_db_list = None
         if filtered_db:
-            filtered_db = filtered_db.split(",")
-            for f in filtered_db:
+            filtered_db_list = filtered_db.split(",")
+            for f in filtered_db_list:
                 if not f.isalnum():
                     raise ValueError(f"Not a valid DB name: {f}")
-        self.filtered_db = filtered_db
+        self.filtered_db = filtered_db if not filtered_db else filtered_db_list
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
 
@@ -194,7 +195,7 @@ class PGCluster:
         filtered = ["template0", "template1"]
         if self.filtered_db:
             filtered.extend(self.filtered_db)
-        db_list = ','.join(f"'{db}'" for db in filtered)
+        db_list = ",".join(f"'{db}'" for db in filtered)
         with self.db_lock:
             dbs = self.c(f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_list})")
             for db in dbs:
@@ -377,7 +378,7 @@ class PGSource(PGCluster):
 
     def replication_in_sync(self, *, dbname: str, slotname: str, max_replication_lag: int) -> Tuple[bool, str]:
         exists = self.c(
-            f"SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
+            "SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
         )
         if not exists:
             self.log.warning("Replication slot %r doesn't exist in database %r", slotname, dbname)
@@ -477,7 +478,7 @@ class PGTarget(PGCluster):
 
     def replication_in_sync(self, *, dbname: str, subname: str, write_lsn: str, max_replication_lag: int) -> bool:
         status = self.c(
-            f"""
+            """
             SELECT stat.*,
             pg_wal_lsn_diff(stat.received_lsn, %s)::BIGINT AS replication_lag
             FROM pg_catalog.pg_stat_subscription stat
@@ -809,7 +810,8 @@ class PGMigrate:
         pg_dump = subprocess.Popen(pg_dump_cmd, stdout=subprocess.PIPE)
         psql = subprocess.Popen(psql_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE)
         # allow pg_dump to receive a SIGPIPE if psql exists
-        pg_dump.stdout.close()
+        if pg_dump.stdout is not None:
+            pg_dump.stdout.close()
         stdout, stderr = psql.communicate()
         if self.verbose:
             for line in stdout.split(b"\n") if stdout else []:
