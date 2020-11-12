@@ -15,7 +15,7 @@ from datetime import datetime
 from distutils.version import LooseVersion
 from pathlib import Path
 from psycopg2.extras import RealDictCursor
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 import enum
 import hashlib
@@ -43,8 +43,24 @@ class PGExtension:
 
 
 @dataclass
+class PGTable:
+    db_name: Optional[str]
+    schema_name: Optional[str]
+    table_name: str
+
+    def __str__(self) -> str:
+        if not self.schema_name:
+            return self.table_name
+        return f"{self.schema_name}.{self.table_name}"
+
+    def __hash__(self) -> int:
+        return hash(self.db_name) ^ hash(self.schema_name) ^ hash(self.table_name)
+
+
+@dataclass
 class PGDatabase:
     dbname: str
+    tables: Set[PGTable]
     pg_ext: List[PGExtension] = field(default_factory=list)
     has_aiven_extras: bool = False
     error: Optional[BaseException] = None
@@ -95,8 +111,9 @@ class PGCluster:
         self._pg_lang = None
         self._pg_roles = dict()
         if filtered_db:
-            filtered_db = filtered_db.split(",")
-        self.filtered_db = filtered_db
+            self.filtered_db = filtered_db.split(",")
+        else:
+            self.filtered_db = []
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
@@ -183,10 +200,20 @@ class PGCluster:
                 has_aiven_extras = False
             else:
                 has_aiven_extras = True
-            self._databases[dbname] = PGDatabase(dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras)
+            ret = self.c(
+                "SELECT tablename, schemaname FROM pg_catalog.pg_tables "
+                "WHERE schemaname NOT IN ('information_schema', 'pg_catalog')",
+                dbname=dbname,
+            )
+            tables = set()
+            for t in ret:
+                tables.add(PGTable(db_name=dbname, table_name=t["tablename"], schema_name=t["schemaname"]))
+            self._databases[dbname] = PGDatabase(
+                dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras, tables=tables
+            )
         except psycopg2.OperationalError as err:
             self.log.warning("Couldn't connect to database %r: %r", dbname, err)
-            self._databases[dbname] = PGDatabase(dbname=dbname, error=err)
+            self._databases[dbname] = PGDatabase(dbname=dbname, error=err, tables=set())
         return []
 
     @property
@@ -194,7 +221,9 @@ class PGCluster:
         filtered = ["template0", "template1"]
         if self.filtered_db:
             filtered.extend(self.filtered_db)
+        # pylint: disable=invalid-string-quote
         db_list = ','.join(f"'{db}'" for db in filtered)
+        # pylint: enable=invalid-string-quote
         with self.db_lock:
             dbs = self.c(f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_list})")
             for db in dbs:
@@ -291,10 +320,10 @@ class PGCluster:
             return self.databases[dbname].has_aiven_extras
         return False
 
-    def refresh_db(self, *, dbname: str) -> bool:
-        if dbname in self.databases:
+    def refresh_db(self, *, db: PGDatabase) -> bool:
+        if db.dbname in self.databases:
             with self.db_lock:
-                self._set_db(dbname=dbname, with_extras=True)
+                self._set_db(dbname=db.dbname, with_extras=True)
             return True
         return False
 
@@ -310,7 +339,8 @@ class PGCluster:
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
-    def create_publication(self, *, dbname: str) -> str:
+
+    def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
         mangled_name = self.mangle_db_name(dbname)
         pubname = f"aiven_db_migrate_{mangled_name}_pub"
         validate_pg_identifier_length(pubname)
@@ -321,25 +351,32 @@ class PGSource(PGCluster):
             pub_options.append("TRUNCATE")
         pub_options = ",".join(pub_options)
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
-
+        pub_scope_logging = "all tables" if not only_tables else ",".join(only_tables)
         self.log.info(
-            "Creating publication %r for all tables in database %r, has_aiven_extras: %s", pubname, dbname, has_aiven_extras
+            "Creating publication %r for %s in database %r, has_aiven_extras: %s", pubname, pub_scope_logging, dbname,
+            has_aiven_extras
         )
         # publications as per database so connect to given database
         if has_aiven_extras:
-            self.c(
-                "SELECT 1 FROM aiven_extras.pg_create_publication_for_all_tables(%s, %s)",
-                args=(
-                    pubname,
-                    pub_options,
-                ),
-                dbname=dbname,
-                return_rows=0
-            )
+            if only_tables:
+                table_params = tuple(only_tables)
+                tables_subst = ",".join([" %s" for _ in only_tables])
+                query = f"SELECT 1 FROM aiven_extras.pg_create_publication(%s, %s, {tables_subst})"
+            else:
+                table_params = ()
+                query = "SELECT 1 FROM aiven_extras.pg_create_publication_for_all_tables(%s, %s)"
+            self.c(query, args=(
+                pubname,
+                pub_options,
+            ) + table_params, dbname=dbname, return_rows=0)
         else:
             # requires superuser or superuser-like privileges, such as "rds_replication" role in AWS RDS
+            if not only_tables:
+                publication_scope = "ALL TABLES"
+            else:
+                publication_scope = "TABLE " + ", ".join(only_tables)
             self.c(
-                f"CREATE PUBLICATION {pubname} FOR ALL TABLES WITH (publish = %s)",
+                f"CREATE PUBLICATION {pubname} FOR {publication_scope} WITH (publish = %s)",
                 args=(pub_options, ),
                 dbname=dbname,
                 return_rows=0
@@ -435,6 +472,7 @@ class PGSource(PGCluster):
 
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
+
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
         mangled_name = self.mangle_db_name(dbname)
         subname = f"aiven_db_migrate_{mangled_name}_sub"
@@ -640,7 +678,13 @@ class PGMigrate:
         verbose: bool = False,
         mangle: bool = False,
         filtered_db: Optional[str] = None,
+        skip_tables: Optional[List[str]] = None,
+        with_tables: Optional[List[str]] = None,
     ):
+        if skip_tables and with_tables:
+            raise Exception("Can only specify a skip table list or a with table list")
+        self.skip_tables = self._convert_table_names(skip_tables)
+        self.with_tables = self._convert_table_names(with_tables)
         self.log = logging.getLogger(self.__class__.__name__)
         self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db, mangle=mangle)
         self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
@@ -653,6 +697,74 @@ class PGMigrate:
         self.stop_replication = stop_replication
         self.verbose = verbose
         self.mangle = mangle
+
+    @staticmethod
+    def _convert_table_names(tables: Optional[List[str]]) -> Set[PGTable]:
+        ret: Set[PGTable] = set()
+        if not tables:
+            return ret
+        for t in tables:
+            sub_names = t.split(".")
+            if len(sub_names) > 3:
+                raise ValueError(f"Table name containing more than two dots not allowed: {t}")
+            if len(sub_names) == 1:
+                ret.add(PGTable(table_name=t, schema_name=None, db_name=None))
+            elif len(sub_names) == 2:
+                ret.add(PGTable(table_name=sub_names[1], schema_name=sub_names[0], db_name=None))
+            else:
+                ret.add(PGTable(table_name=sub_names[2], schema_name=sub_names[1], db_name=sub_names[0]))
+        return ret
+
+    def filter_tables(self, db: PGDatabase) -> List[str]:
+        self.log.debug(
+            "Filtering tables for db %r, and skip tables %r and with tables %r", db, self.skip_tables, self.with_tables
+        )
+        if not self.skip_tables and not self.with_tables:
+            return []
+        if not db.tables:
+            return []
+        ret = set()
+        if self.skip_tables:
+            # the db tables should be properly populated on all 3 fields, so we can consider one of the user passed ones
+            # to be equivalent the table name is the same AND the schema name is missing or the same AND the
+            # db name is missing or the same
+            for t in db.tables:
+                found: Optional[PGTable] = None
+                for s in self.skip_tables:
+                    # we can add it if the table name differs or the schema name differs or the db name differs
+                    if (
+                        t.table_name == s.table_name and (not s.schema_name or t.schema_name == s.schema_name)
+                        and (not s.db_name or t.db_name == s.db_name)
+                    ):
+                        found = t
+                        break
+                if not found:
+                    ret.add(t)
+        else:
+            for t in db.tables:
+                found = None
+                for w in self.with_tables:
+                    # we consider it equivalent if the name is the same and the schema is missing or the same
+                    # and the db name is missing or the same
+                    if (
+                        t.table_name == w.table_name and (not w.schema_name or t.schema_name == w.schema_name)
+                        and (not w.db_name or t.db_name == w.db_name)
+                    ):
+                        found = w
+                        break
+                if found:
+                    ret.add(found)
+        quoted = []
+        for table in ret:
+            if table.schema_name:
+                name = self.source.c(
+                    "SELECT quote_ident(%s) || '.' || quote_ident(%s) as table_name",
+                    args=(table.schema_name, table.table_name),
+                )[0]["table_name"]
+            else:
+                name = self.source.c("SELECT quote_ident(%s) as table_name", args=(table.table_name, ))[0]["table_name"]
+            quoted.append(name)
+        return quoted
 
     def _check_databases(self):
         for db in self.source.databases.values():
@@ -829,12 +941,21 @@ class PGMigrate:
             self.log.warning(self._decode_output_line(line))
         return PGSubTask(pid=psql.pid, returncode=psql.returncode, stdout=stdout, stderr=stderr)
 
-    def _dump_schema(self, *, dbname: Optional[str]):
+    def _dump_schema(
+        self,
+        *,
+        db: Optional[PGDatabase],
+    ):
+        if db:
+            dbname: Optional[str] = db.dbname
+        else:
+            dbname = None
+
         self.log.info("Dumping schema from database %r", dbname)
         pg_dump_cmd = [
             str(self.pgbin / "pg_dump"),
             # Setting owner requires superuser when generated script is run or the same user that owns
-            # all of the objects in the script. Using '--no-owmer' gives ownership of all the objects to
+            # all of the objects in the script. Using '--no-owner' gives ownership of all the objects to
             # the user who is running the script.
             "--no-owner",
             # Skip COMMENT statements as they require superuser (--no-comments is available in pg 11).
@@ -852,13 +973,15 @@ class PGMigrate:
         if subtask.returncode != 0:
             raise PGSchemaDumpFailedError(f"Failed to dump schema: {subtask!r}")
 
-    def _dump_data(self, *, dbname: str) -> PGMigrateStatus:
+    def _dump_data(self, *, db: PGDatabase) -> PGMigrateStatus:
+        dbname = db.dbname
         self.log.info("Dumping data from database %r", dbname)
         pg_dump_cmd = [
             str(self.pgbin / "pg_dump"),
             "--data-only",
             self.source.conn_str(dbname=dbname),
         ]
+        pg_dump_cmd.extend([f"--table={w}" for w in self.filter_tables(db)])
         subtask: PGSubTask = self._pg_dump_pipe_psql(
             pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname)
         )
@@ -877,15 +1000,17 @@ class PGMigrate:
                 break
             time.sleep(check_interval)
 
-    def _db_replication(self, *, dbname: str) -> PGMigrateStatus:
+    def _db_replication(self, *, db: PGDatabase) -> PGMigrateStatus:
+        dbname = db.dbname
         pubname = slotname = subname = None
         try:
-            pubname = self.source.create_publication(dbname=dbname)
+            pubname = self.source.create_publication(dbname=dbname, only_tables=self.filter_tables(db))
             slotname = self.source.create_replication_slot(dbname=dbname)
             subname = self.target.create_subscription(
                 conn_str=self.source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
             )
-        except psycopg2.ProgrammingError:
+        except psycopg2.ProgrammingError as e:
+            self.log.error("Encountered error: %e, cleaning up", e)
             if subname:
                 self.target.cleanup(dbname=dbname, subname=subname)
             if pubname and slotname:
@@ -909,13 +1034,12 @@ class PGMigrate:
         if pgtask.target_db and pgtask.target_db.error:
             raise pgtask.target_db.error
 
-        dbname: str = pgtask.source_db.dbname
-        self._dump_schema(dbname=dbname)
-        self.target.refresh_db(dbname=dbname)
+        self._dump_schema(db=pgtask.source_db)
+        self.target.refresh_db(db=pgtask.source_db)
         if self.source.replication_available:
             pgtask.method = PGMigrateMethod.replication
             try:
-                return self._db_replication(dbname=dbname)
+                return self._db_replication(db=pgtask.source_db)
             except psycopg2.ProgrammingError as err:
                 if err.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE:
                     self.log.warning("Logical replication failed with error: %r, fallback to dump", err.diag.message_primary)
@@ -923,7 +1047,7 @@ class PGMigrate:
                     # unexpected error
                     raise
         pgtask.method = PGMigrateMethod.dump
-        return self._dump_data(dbname=dbname)
+        return self._dump_data(db=pgtask.source_db)
 
     def validate(self):
         """
@@ -1038,9 +1162,10 @@ def main(args=None, *, prog="pg_migrate"):
         "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
     )
     parser.add_argument(
-        "-m", "--mangle",
+        "-m",
+        "--mangle",
         action="store_true",
-        help="Mangle the DB name for the purpose of having a predictible identifier len",
+        help="Mangle the DB name for the purpose of having a predictable identifier len",
     )
     parser.add_argument(
         "--max-replication-lag",
@@ -1058,6 +1183,26 @@ def main(args=None, *, prog="pg_migrate"):
         )
     )
     parser.add_argument("--validate", action="store_true", help="Run only best effort validation.")
+    table_common_help = (
+        "One dot in the table name will be considered a separator between schema and table name."
+        "Two dots in the table name will be considered separators between database, schema and table name"
+        "More than two dot will will cause ambiguity and thus raise an error."
+        "Tables with no DB specified will attempt a match against all present databases"
+        "Tables with no schema specified will attempt a match against all schemas in all databases"
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--with-table",
+        action="append",
+        help="When specified, the migration method will include the named tables only instead of all tables."
+        "Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
+    )
+    group.add_argument(
+        "--skip-table",
+        action="append",
+        help="When specified, the migration method will include all tables except the named tables."
+        "Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
+    )
     args = parser.parse_args(args)
 
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1075,6 +1220,8 @@ def main(args=None, *, prog="pg_migrate"):
         verbose=args.verbose,
         filtered_db=args.filtered_db,
         mangle=args.mangle,
+        skip_tables=args.skip_table,
+        with_tables=args.with_table,
     )
     if args.validate:
         pg_mig.validate()
@@ -1097,3 +1244,7 @@ def main(args=None, *, prog="pg_migrate"):
                 )
             )
         print()
+
+
+if __name__ == "__main__":
+    main()

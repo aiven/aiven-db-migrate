@@ -40,6 +40,7 @@ class TimerBase:
 
 class Timer(TimerBase):
     """Multipurpose timer"""
+
     def __init__(self, *, timeout=None, sleep=1.0, what=None):
         super().__init__()
         self._what = what or "operation to complete"

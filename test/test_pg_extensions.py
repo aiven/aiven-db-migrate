@@ -27,7 +27,7 @@ def test_defaults(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: boo
 
     pg_mig.validate()
     for dbname in dbnames:
-        pg_mig._dump_schema(dbname=dbname)  # pylint: disable=protected-access
+        pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -79,7 +79,7 @@ def test_extension_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
     )
 
     pg_mig.validate()
-    pg_mig._dump_schema(dbname=dbname)  # pylint: disable=protected-access
+    pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -112,7 +112,7 @@ def test_extension_whitelist(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
 
     pg_mig.validate()
     for dbname in dbnames:
-        pg_mig._dump_schema(dbname=dbname)  # pylint: disable=protected-access
+        pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -140,7 +140,7 @@ def test_extension_not_available(pg_source_and_target: Tuple[PGRunner, PGRunner]
     # mock source databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, pg_ext=[PGExtension(name=extname, version="1.2.3")])}
+        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version="1.2.3")])}
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:
@@ -165,7 +165,7 @@ def test_extension_available_older_version(pg_source_and_target: Tuple[PGRunner,
     # mock source databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, pg_ext=[PGExtension(name=extname, version="999999")])}
+        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version="999999")])}
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:
@@ -187,11 +187,11 @@ def test_extension_installed_older_version(pg_source_and_target: Tuple[PGRunner,
     # mock source and target databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, pg_ext=[PGExtension(name=extname, version=source_ver)])}
+        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version=source_ver)])}
     )
     setattr(
         pg_mig.target, "_databases",
-        {dbname: PGDatabase(dbname=dbname, pg_ext=[PGExtension(name=extname, version=target_ver)])}
+        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version=target_ver)])}
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:

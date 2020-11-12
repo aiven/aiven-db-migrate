@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven_db_migrate.migrate.pgmigrate import PGMigrate
+from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGMigrate
 from test.conftest import PGRunner
 from test.utils import random_string
 from typing import Tuple
@@ -13,7 +13,6 @@ def test_dump(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
     source, target = pg_source_and_target
     dbname = random_string()
     tblname = random_string()
-
     # create db and table with some data in source
     source.create_db(dbname=dbname)
     with source.cursor(dbname=dbname) as cur:
@@ -32,8 +31,9 @@ def test_dump(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
     pg_mig.validate()
 
     # dump both schema and data
-    pg_mig._dump_schema(dbname=dbname)  # pylint: disable=protected-access
-    pg_mig._dump_data(dbname=dbname)  # pylint: disable=protected-access
+    db = PGDatabase(dbname=dbname, tables=set())
+    pg_mig._dump_schema(db=db)  # pylint: disable=protected-access
+    pg_mig._dump_data(db=db)  # pylint: disable=protected-access
 
     # verify that db/table migrated to target
     exists = pg_mig.target.c(
