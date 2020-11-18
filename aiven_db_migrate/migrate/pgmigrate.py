@@ -33,6 +33,7 @@ import time
 
 # https://www.psycopg.org/docs/faq.html#faq-interrupt-query
 psycopg2.extensions.set_wait_callback(psycopg2.extras.wait_select)
+MAX_CLI_LEN = 2097152  # getconf ARG_MAX
 
 
 @dataclass
@@ -42,11 +43,12 @@ class PGExtension:
     superuser: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class PGTable:
     db_name: Optional[str]
     schema_name: Optional[str]
     table_name: str
+    extension_name: Optional[str]
 
     def __str__(self) -> str:
         if not self.schema_name:
@@ -54,7 +56,16 @@ class PGTable:
         return f"{self.schema_name}.{self.table_name}"
 
     def __hash__(self) -> int:
-        return hash(self.db_name) ^ hash(self.schema_name) ^ hash(self.table_name)
+        return ((hash(self.db_name) & 0xFFFF000000000000) ^ (hash(self.schema_name) & 0x0000FFFF00000000) ^
+                (hash(self.table_name) & 0x00000000FFFFFFFF))
+
+    def __eq__(self, other):
+        if not isinstance(other, PGTable):
+            return False
+        return (
+            self.table_name == other.table_name and self.schema_name == other.schema_name and self.db_name == other.db_name
+            and self.extension_name == other.extension_name
+        )
 
 
 @dataclass
@@ -200,14 +211,33 @@ class PGCluster:
                 has_aiven_extras = False
             else:
                 has_aiven_extras = True
+            extension_tables = {}
+            extension_tables_res = self.c(
+                "SELECT extname, extconfig FROM pg_catalog.pg_extension WHERE extconfig IS NOT NULL", dbname=dbname
+            )
+            for row in extension_tables_res:
+                for table_id in row["extconfig"]:
+                    extension_tables[table_id] = row["extname"]
             ret = self.c(
-                "SELECT tablename, schemaname FROM pg_catalog.pg_tables "
-                "WHERE schemaname NOT IN ('information_schema', 'pg_catalog')",
+                """SELECT pg_class.oid AS table_id, 
+                        pg_catalog.pg_class.relname AS table_name, 
+                        pg_catalog.pg_namespace.nspname AS schema_name
+                        FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace 
+                            ON (pg_catalog.pg_class.relnamespace=pg_catalog.pg_namespace.oid) 
+                            JOIN pg_catalog.pg_tables ON 
+                                (pg_catalog.pg_tables.schemaname=pg_catalog.pg_namespace.nspname 
+                                AND pg_catalog.pg_tables.tablename=pg_catalog.pg_class.relname)
+                    WHERE pg_catalog.pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema')""",
                 dbname=dbname,
             )
             tables = set()
             for t in ret:
-                tables.add(PGTable(db_name=dbname, table_name=t["tablename"], schema_name=t["schemaname"]))
+                ext_name = extension_tables.get(t["table_id"])
+                tables.add(
+                    PGTable(
+                        db_name=dbname, table_name=t["table_name"], schema_name=t["schema_name"], extension_name=ext_name
+                    )
+                )
             self._databases[dbname] = PGDatabase(
                 dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras, tables=tables
             )
@@ -221,9 +251,7 @@ class PGCluster:
         filtered = ["template0", "template1"]
         if self.filtered_db:
             filtered.extend(self.filtered_db)
-        # pylint: disable=invalid-string-quote
-        db_list = ','.join(f"'{db}'" for db in filtered)
-        # pylint: enable=invalid-string-quote
+        db_list = ",".join(f"'{db}'" for db in filtered)
         with self.db_lock:
             dbs = self.c(f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_list})")
             for db in dbs:
@@ -360,7 +388,7 @@ class PGSource(PGCluster):
         if has_aiven_extras:
             if only_tables:
                 table_params = tuple(only_tables)
-                tables_subst = ",".join([" %s" for _ in only_tables])
+                tables_subst = ",".join(" %s" for _ in only_tables)
                 query = f"SELECT 1 FROM aiven_extras.pg_create_publication(%s, %s, {tables_subst})"
             else:
                 table_params = ()
@@ -680,14 +708,15 @@ class PGMigrate:
         filtered_db: Optional[str] = None,
         skip_tables: Optional[List[str]] = None,
         with_tables: Optional[List[str]] = None,
+        replicate_extensions: bool = True,
     ):
         if skip_tables and with_tables:
             raise Exception("Can only specify a skip table list or a with table list")
-        self.skip_tables = self._convert_table_names(skip_tables)
-        self.with_tables = self._convert_table_names(with_tables)
         self.log = logging.getLogger(self.__class__.__name__)
         self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db, mangle=mangle)
         self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
+        self.skip_tables = self._convert_table_names(skip_tables)
+        self.with_tables = self._convert_table_names(with_tables)
         self.pgbin = Path()
         # include commands to create db in pg_dump output
         self.createdb = createdb
@@ -697,29 +726,39 @@ class PGMigrate:
         self.stop_replication = stop_replication
         self.verbose = verbose
         self.mangle = mangle
+        self.replicate_extensions = replicate_extensions
 
-    @staticmethod
-    def _convert_table_names(tables: Optional[List[str]]) -> Set[PGTable]:
+    def _convert_table_names(self, tables: Optional[List[str]]) -> Set[PGTable]:
         ret: Set[PGTable] = set()
         if not tables:
             return ret
         for t in tables:
-            sub_names = t.split(".")
+            sub_names = self.target.c("SELECT * FROM parse_ident(%s)", args=[t])[0]["parse_ident"]
             if len(sub_names) > 3:
                 raise ValueError(f"Table name containing more than two dots not allowed: {t}")
             if len(sub_names) == 1:
-                ret.add(PGTable(table_name=t, schema_name=None, db_name=None))
+                ret.add(PGTable(table_name=sub_names[0], schema_name=None, db_name=None, extension_name=None))
             elif len(sub_names) == 2:
-                ret.add(PGTable(table_name=sub_names[1], schema_name=sub_names[0], db_name=None))
+                ret.add(PGTable(table_name=sub_names[1], schema_name=sub_names[0], db_name=None, extension_name=None))
             else:
-                ret.add(PGTable(table_name=sub_names[2], schema_name=sub_names[1], db_name=sub_names[0]))
+                ret.add(
+                    PGTable(table_name=sub_names[2], schema_name=sub_names[1], db_name=sub_names[0], extension_name=None)
+                )
         return ret
 
     def filter_tables(self, db: PGDatabase) -> List[str]:
+        """
+            Given a database, it will attempt to return a list of tables that should be data dumped / replicated
+            based on the skip table list, with table list and the replicate extensions flag
+            Returning an empty value signals the downstream caller to replicate / dump the entire database
+            The replicate extensions flag is applied after the 2 lists, meaning that if those are empty but a given
+            database has tables belonging to an extension and the flag is set to false, then we should NOT
+            replicate / dump the entire database
+        """
         self.log.debug(
             "Filtering tables for db %r, and skip tables %r and with tables %r", db, self.skip_tables, self.with_tables
         )
-        if not self.skip_tables and not self.with_tables:
+        if not self.skip_tables and not self.with_tables and self.replicate_extensions:
             return []
         if not db.tables:
             return []
@@ -740,7 +779,7 @@ class PGMigrate:
                         break
                 if not found:
                     ret.add(t)
-        else:
+        elif self.with_tables:
             for t in db.tables:
                 found = None
                 for w in self.with_tables:
@@ -750,10 +789,19 @@ class PGMigrate:
                         t.table_name == w.table_name and (not w.schema_name or t.schema_name == w.schema_name)
                         and (not w.db_name or t.db_name == w.db_name)
                     ):
-                        found = w
+                        found = t
                         break
                 if found:
                     ret.add(found)
+        elif not self.replicate_extensions:
+            ret = db.tables
+
+        if not self.replicate_extensions:
+            ret = [t for t in ret if t.extension_name is None]
+        # -t <table_name> + connection params and other pg_dump / psql params
+        total_table_len = sum(4 + len(str(t)) for t in ret)
+        if total_table_len + 200 > MAX_CLI_LEN:
+            raise ValueError("Table count exceeding safety limit")
         quoted = []
         for table in ret:
             if table.schema_name:
@@ -762,7 +810,7 @@ class PGMigrate:
                     args=(table.schema_name, table.table_name),
                 )[0]["table_name"]
             else:
-                name = self.source.c("SELECT quote_ident(%s) as table_name", args=(table.table_name, ))[0]["table_name"]
+                name = self.source.c("SELECT quote_ident(%s) as table_name", args=[table.table_name])[0]["table_name"]
             quoted.append(name)
         return quoted
 
@@ -1184,24 +1232,29 @@ def main(args=None, *, prog="pg_migrate"):
     )
     parser.add_argument("--validate", action="store_true", help="Run only best effort validation.")
     table_common_help = (
-        "One dot in the table name will be considered a separator between schema and table name."
-        "Two dots in the table name will be considered separators between database, schema and table name"
-        "More than two dot will will cause ambiguity and thus raise an error."
-        "Tables with no DB specified will attempt a match against all present databases"
-        "Tables with no schema specified will attempt a match against all schemas in all databases"
+        " Table names can be qualified by name only, schema name and table name or DB , schema and table name."
+        " Tables with no DB specified will attempt a match against all present databases."
+        " Tables with no schema specified will attempt a match against all schemas in all databases."
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--with-table",
         action="append",
         help="When specified, the migration method will include the named tables only instead of all tables."
-        "Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
+        " Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
     )
     group.add_argument(
         "--skip-table",
         action="append",
         help="When specified, the migration method will include all tables except the named tables."
-        "Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
+        " Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
+    )
+    parser.add_argument(
+        "--replicate-extension-tables",
+        action="store_true",
+        default=True,
+        help="Whether logical replication should try to add tables "
+        "belonging to extensions to the publication definition"
     )
     args = parser.parse_args(args)
 
@@ -1222,6 +1275,7 @@ def main(args=None, *, prog="pg_migrate"):
         mangle=args.mangle,
         skip_tables=args.skip_table,
         with_tables=args.with_table,
+        replicate_extensions=args.replicate_extension_tables,
     )
     if args.validate:
         pg_mig.validate()
