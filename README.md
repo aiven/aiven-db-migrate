@@ -19,7 +19,7 @@ Requires Python 3.5 or newer.
 
 Running library module:
 ```
-$ python3 -m aiven.migrate -h
+$ python3 -m aiven_db_migrate.migrate -h
 Available commands: pg
 ```
 
@@ -41,7 +41,7 @@ Requirements:
 
 Run library module:
 ```
-$ python3 -m aiven.migrate pg -h
+$ python3 -m aiven_db_migrate.migrate pg -h
 ```
 or, if installed:
 ```

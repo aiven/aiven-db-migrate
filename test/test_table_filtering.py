@@ -6,6 +6,8 @@ from typing import Dict, Set, Tuple
 import psycopg2
 import pytest
 
+#  pylint: disable=invalid-string-quote
+
 
 @pytest.mark.parametrize(["skip", "with_extension"], [
     [False, False],
@@ -195,7 +197,7 @@ def test_replicate_filter_with(pg_source_and_target_replication: Tuple[PGRunner,
                 assert result.pg_databases[db]["method"] == "dump", result.pg_databases[db]
         matched_tables: Dict[str, Set] = {db_name: set(), other_db_name: set()}
         desired = {db_name: {'"ta .\'ble0"', '"ta .\'ble1"'}, other_db_name: {'"ta .\'ble2"'}}
-        timer = Timer(timeout=20, sleep=1, what="Waiting for data to replicate")
+        timer = Timer(timeout=30, sleep=1, what="Waiting for data to replicate")
         while timer.loop():
             if desired == matched_tables:
                 break

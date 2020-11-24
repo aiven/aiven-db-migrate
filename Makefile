@@ -55,3 +55,6 @@ test: $(generated)
 
 clean:
 	$(RM) aiven_db_migrate/migrate/version.py
+
+rpm:
+	sudo $(PYTHON) setup.py bdist_rpm && rm -rf build/
