@@ -4,7 +4,7 @@ from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult
 from test.conftest import PGRunner
 from test.utils import random_string, Timer
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import psycopg2
 import pytest
@@ -18,7 +18,13 @@ class PGMigrateTest:
 
     @staticmethod
     def assert_result(
-        *, result: Dict[str, Any], dbname: str, method: str, message: str = None, error: str = None, status: str = "done"
+        *,
+        result: Dict[str, Any],
+        dbname: str,
+        method: Optional[str],
+        message: str = None,
+        error: str = None,
+        status: str = "done"
     ):
         assert message or error
         assert result["dbname"] == dbname
@@ -259,7 +265,7 @@ class Test_PGMigrate_Replication(PGMigrateTest):
     def test_migrate_with_superuser(self, createdb: bool):
         return self._test_migrate(createdb=createdb, expected_method="replication", superuser=True)
 
-    @pytest.mark.parametrize("createdb", [True, False])
+    @pytest.mark.parametrize("createdb", [True])
     def test_migrate_source_aiven_extras(self, createdb: bool):
         dbname = random_string()
         tblname = f"{dbname}_tbl"
@@ -278,11 +284,9 @@ class Test_PGMigrate_Replication(PGMigrateTest):
         self.target.make_conf(**{"extwlist.extensions": "'{}'".format(",".join(extnames))}).reload()
 
         if not createdb:
-            # create existing db to target
+            # create existing db to target, since we are also doing this automatically and failing silently in the tool
+            # the expected method will always be replication
             self.target.create_db(dbname=dbname)
-            expected_method = "replication"
-        else:
-            expected_method = "dump"
 
         pg_mig = PGMigrate(
             source_conn_info=self.source.conn_info(),
@@ -299,7 +303,7 @@ class Test_PGMigrate_Replication(PGMigrateTest):
         self.assert_result(
             result=result.pg_databases[dbname],
             dbname=dbname,
-            method=expected_method,
+            method="replication",
             message="created and migrated database" if createdb else "migrated to existing database"
         )
         self.wait_until_data_migrated(pg_mig=pg_mig, dbname=dbname, tblname=tblname, count=3)
