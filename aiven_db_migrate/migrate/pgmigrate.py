@@ -186,7 +186,8 @@ class PGCluster:
     @property
     def version(self) -> LooseVersion:
         if self._version is None:
-            self._version = LooseVersion(self.params["server_version"])
+            # will make this work on ubuntu, for strings like '12.5 (Ubuntu 12.5-1.pgdg18.04+1)'
+            self._version = LooseVersion(self.params["server_version"].split(" ")[0])
         return self._version
 
     @property
@@ -219,13 +220,13 @@ class PGCluster:
                 for table_id in row["extconfig"]:
                     extension_tables[table_id] = row["extname"]
             ret = self.c(
-                """SELECT pg_class.oid AS table_id, 
-                        pg_catalog.pg_class.relname AS table_name, 
+                """SELECT pg_class.oid AS table_id,
+                        pg_catalog.pg_class.relname AS table_name,
                         pg_catalog.pg_namespace.nspname AS schema_name
-                        FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace 
-                            ON (pg_catalog.pg_class.relnamespace=pg_catalog.pg_namespace.oid) 
-                            JOIN pg_catalog.pg_tables ON 
-                                (pg_catalog.pg_tables.schemaname=pg_catalog.pg_namespace.nspname 
+                        FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace
+                            ON (pg_catalog.pg_class.relnamespace=pg_catalog.pg_namespace.oid)
+                            JOIN pg_catalog.pg_tables ON
+                                (pg_catalog.pg_tables.schemaname=pg_catalog.pg_namespace.nspname
                                 AND pg_catalog.pg_tables.tablename=pg_catalog.pg_class.relname)
                     WHERE pg_catalog.pg_namespace.nspname NOT IN ('pg_catalog', 'information_schema')""",
                 dbname=dbname,
@@ -367,7 +368,6 @@ class PGCluster:
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
-
     def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
         mangled_name = self.mangle_db_name(dbname)
         pubname = f"aiven_db_migrate_{mangled_name}_pub"
@@ -500,7 +500,6 @@ class PGSource(PGCluster):
 
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
-
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
         mangled_name = self.mangle_db_name(dbname)
         subname = f"aiven_db_migrate_{mangled_name}_sub"
@@ -762,7 +761,7 @@ class PGMigrate:
             return []
         if not db.tables:
             return []
-        ret = set()
+        ret: Set[PGTable] = set()
         if self.skip_tables:
             # the db tables should be properly populated on all 3 fields, so we can consider one of the user passed ones
             # to be equivalent the table name is the same AND the schema name is missing or the same AND the
@@ -794,10 +793,10 @@ class PGMigrate:
                 if found:
                     ret.add(found)
         elif not self.replicate_extensions:
-            ret = db.tables
+            ret = set(db.tables)
 
         if not self.replicate_extensions:
-            ret = [t for t in ret if t.extension_name is None]
+            ret = {t for t in ret if t.extension_name is None}
         # -t <table_name> + connection params and other pg_dump / psql params
         total_table_len = sum(4 + len(str(t)) for t in ret)
         if total_table_len + 200 > MAX_CLI_LEN:
@@ -1058,7 +1057,7 @@ class PGMigrate:
                 conn_str=self.source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
             )
         except psycopg2.ProgrammingError as e:
-            self.log.error("Encountered error: %e, cleaning up", e)
+            self.log.error("Encountered error: %r, cleaning up", e)
             if subname:
                 self.target.cleanup(dbname=dbname, subname=subname)
             if pubname and slotname:
