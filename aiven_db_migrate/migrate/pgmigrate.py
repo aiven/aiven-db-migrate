@@ -368,6 +368,7 @@ class PGCluster:
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
+
     def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
         mangled_name = self.mangle_db_name(dbname)
         pubname = f"aiven_db_migrate_{mangled_name}_pub"
@@ -500,6 +501,7 @@ class PGSource(PGCluster):
 
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
+
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
         mangled_name = self.mangle_db_name(dbname)
         subname = f"aiven_db_migrate_{mangled_name}_sub"

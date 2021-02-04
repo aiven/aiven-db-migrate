@@ -4,4 +4,4 @@ mypy==0.790
 psycopg2==2.7.7
 pylint==2.6.0
 pytest==6.1.2
-yapf==0.30.0
+yapf==0.27.0
