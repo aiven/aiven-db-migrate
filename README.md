@@ -27,6 +27,8 @@ Installing in virtualenv:
 ```
 $ python3 -m venv venv
 $ . venv/bin/activate
+$ ## Run make to set the proper version
+$ make
 $ pip install .
 ```
 
