@@ -19,7 +19,7 @@ setup(
         ],
     },
     install_requires=[
-        "psycopg2-binary==2.8.6"
+        "psycopg2"
     ],
     license="Apache 2.0",
     name="aiven-db-migrate",
