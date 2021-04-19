@@ -402,6 +402,7 @@ def inject_pg_fixture(*, name: str, pgversion: str, scope="module"):
 
 
 SUPPORTED_PG_VERSIONS = ["9.5", "9.6", "10", "11", "12"]
+pg_cluster_for_tests: List[str] = list()
 pg_source_and_target_for_tests: List[Tuple[str, str]] = list()
 pg_source_and_target_for_replication_tests: List[Tuple[str, str]] = list()
 
@@ -437,6 +438,10 @@ def generate_fixtures():
             pg_source_and_target_for_tests.append((source_name, target_name))
             if LooseVersion(source) >= "10":
                 pg_source_and_target_for_replication_tests.append((source_name, target_name))
+    for version in set(pg_source_versions).union(pg_target_versions):
+        fixture_name = "pg{}".format(version.replace(".", ""))
+        inject_pg_fixture(name=fixture_name, pgversion=version)
+        pg_cluster_for_tests.append(fixture_name)
 
 
 generate_fixtures()
@@ -448,6 +453,17 @@ def test_pg_source_and_target_for_tests():
 
 def test_pg_source_and_target_for_replication_tests():
     print(pg_source_and_target_for_replication_tests)
+
+
+@pytest.fixture(name="pg_cluster", params=pg_cluster_for_tests, scope="function")
+def fixture_pg_cluster(request):
+    """Returns a fixture parametrized on the union of all source and target pg versions."""
+    cluster_runner = request.getfixturevalue(request.param)
+    yield cluster_runner
+    for cleanup in cluster_runner.cleanups:
+        cleanup()
+    cluster_runner.cleanups.clear()
+    cluster_runner.drop_dbs()
 
 
 @pytest.fixture(name="pg_source_and_target", params=pg_source_and_target_for_tests, scope="function")

@@ -6,8 +6,10 @@ from test.conftest import PGRunner
 from test.utils import random_string, Timer
 from typing import Any, Dict, Optional
 
+import os
 import psycopg2
 import pytest
+import time
 
 
 class PGMigrateTest:
@@ -153,6 +155,27 @@ class Test_PGMigrate(PGMigrateTest):
                 with pytest.raises(PGMigrateValidationFailedError) as err:
                     PGMigrate(source_conn_info=source_conn_info, target_conn_info=target_conn_info).migrate()
                 assert str(err.value) == "Invalid source or target connection string"
+
+    def test_migrate_connect_timeout_parameter(self):
+        for source_conn_info in ("host=example.org connect_timeout=1", "postgresql://example.org?connect_timeout=1"):
+            start_time = time.monotonic()
+            with pytest.raises(TimeoutError):
+                PGMigrate(source_conn_info=source_conn_info, target_conn_info=self.target.conn_info()).migrate()
+            end_time = time.monotonic()
+            assert end_time - start_time < 2
+
+    def test_migrate_connect_timeout_environment(self):
+        start_time = time.monotonic()
+        original_timeout = os.environ.get("PGCONNECT_TIMEOUT")
+        try:
+            os.environ["PGCONNECT_TIMEOUT"] = "1"
+            with pytest.raises(TimeoutError):
+                PGMigrate(source_conn_info="host=example.org", target_conn_info=self.target.conn_info()).migrate()
+            end_time = time.monotonic()
+            assert end_time - start_time < 2
+        finally:
+            if original_timeout is not None:
+                os.environ["PGCONNECT_TIMEOUT"] = original_timeout
 
     def test_migrate_same_server(self):
         source_conn_info = target_conn_info = self.target.conn_info()
