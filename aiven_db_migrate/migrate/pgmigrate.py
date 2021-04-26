@@ -4,7 +4,7 @@ from aiven_db_migrate.migrate.errors import (
     PGDataDumpFailedError, PGDataNotFoundError, PGMigrateValidationFailedError, PGSchemaDumpFailedError, PGTooMuchDataError
 )
 from aiven_db_migrate.migrate.pgutils import (
-    create_connection_string, find_pgbin_dir, get_connection_info, validate_pg_identifier_length
+    create_connection_string, find_pgbin_dir, get_connection_info, validate_pg_identifier_length, wait_select
 )
 from aiven_db_migrate.migrate.version import __version__
 from concurrent import futures
@@ -31,8 +31,6 @@ import subprocess
 import threading
 import time
 
-# https://www.psycopg.org/docs/faq.html#faq-interrupt-query
-psycopg2.extensions.set_wait_callback(psycopg2.extras.wait_select)
 MAX_CLI_LEN = 2097152  # getconf ARG_MAX
 
 
@@ -136,6 +134,12 @@ class PGCluster:
         conn_info["application_name"] = conn_info["application_name"] + "/" + self.mangle_db_name(conn_info["dbname"])
         return create_connection_string(conn_info)
 
+    def connect_timeout(self):
+        try:
+            return int(self.conn_info.get("connect_timeout", os.environ.get("PGCONNECT_TIMEOUT", "")))
+        except ValueError:
+            return None
+
     @contextmanager
     def _cursor(self, *, dbname: str = None) -> RealDictCursor:
         conn: psycopg2.extensions.connection = None
@@ -146,8 +150,8 @@ class PGCluster:
         # from multiple threads; allow only one connection at time
         self.conn_lock.acquire()
         try:
-            conn = psycopg2.connect(**conn_info)
-            conn.autocommit = True
+            conn = psycopg2.connect(**conn_info, async_=True)
+            wait_select(conn, self.connect_timeout())
             yield conn.cursor(cursor_factory=RealDictCursor)
         finally:
             if conn is not None:
@@ -165,7 +169,15 @@ class PGCluster:
     ) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         with self._cursor(dbname=dbname) as cur:
-            cur.execute(query, args)
+            try:
+                cur.execute(query, args)
+                wait_select(cur.connection)
+            except KeyboardInterrupt:
+                # We wrap the whole execute+wait block to make sure we cancel
+                # the query in all cases, which we couldn't if KeyboardInterupt
+                # was only handled inside wait_select.
+                cur.connection.cancel()
+                raise
             if return_rows:
                 results = cur.fetchall()
         if return_rows > 0 and len(results) != return_rows:

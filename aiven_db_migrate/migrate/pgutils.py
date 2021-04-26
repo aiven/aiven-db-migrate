@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
+import psycopg2
+import select
+import time
+
 
 def find_pgbin_dir(pgversion: str) -> Path:
     def _pgbin_paths():
@@ -105,3 +109,37 @@ def parse_connection_string_url(url: str) -> Dict[str, str]:
     for k, v in parse_qs(p.query).items():
         fields[k] = v[-1]
     return fields
+
+
+# This enables interruptible queries with an approach similar to
+# https://www.psycopg.org/docs/faq.html#faq-interrupt-query
+# However, to handle timeouts we can't use psycopg2.extensions.set_wait_callback :
+# https://github.com/psycopg/psycopg2/issues/944
+# Instead we rely on manually calling wait_select after connection and queries.
+# Since it's not a wait callback, we do not capture and transform KeyboardInterupt here.
+def wait_select(conn, timeout=None):
+    start_time = time.monotonic()
+    poll = select.poll()
+    while True:
+        if timeout is not None and timeout > 0:
+            time_left = start_time + timeout - time.monotonic()
+            if time_left <= 0:
+                raise TimeoutError("wait_select: timeout after {} seconds".format(timeout))
+        else:
+            time_left = 1
+        state = conn.poll()
+        if state == psycopg2.extensions.POLL_OK:
+            return
+        elif state == psycopg2.extensions.POLL_READ:
+            poll.register(conn.fileno(), select.POLLIN)
+        elif state == psycopg2.extensions.POLL_WRITE:
+            poll.register(conn.fileno(), select.POLLOUT)
+        else:
+            raise conn.OperationalError("wait_select: invalid poll state")
+        try:
+            # When the remote address does not exist at all, poll.poll() waits its full timeout without any event.
+            # However, in the same conditions, conn.poll() raises a psycopg2 exception almost immediately.
+            # It is better to fail quickly instead of waiting the full timeout, so we keep our poll.poll() below 1sec.
+            poll.poll(min(1.0, time_left) * 1000)
+        finally:
+            poll.unregister(conn.fileno())
