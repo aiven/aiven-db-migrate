@@ -1129,7 +1129,9 @@ class PGMigrate:
                 raise PGMigrateValidationFailedError("Migrating to the same server is not supported")
             if self.source.version > self.target.version:
                 raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
-            self.pgbin = find_pgbin_dir(str(self.source.version))
+            # pgdump cannot be older than the source version, cannot be newer than the target version
+            # but it can be newer than the source version: source <= pgdump <= target
+            self.pgbin = find_pgbin_dir(str(self.source.version), max_pgversion=str(self.target.version))
             self._check_databases()
             self._check_pg_lang()
             self._check_pg_ext()
