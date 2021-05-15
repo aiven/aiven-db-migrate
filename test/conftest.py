@@ -51,7 +51,7 @@ class PGRunner:
             "-o",
             "--encoding utf-8",
         )
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env={"TZ": "UTC"})
         return self
 
     def make_conf(self, **kwargs) -> PGRunner:
