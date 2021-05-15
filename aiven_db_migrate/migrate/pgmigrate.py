@@ -1,5 +1,4 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-
 from aiven_db_migrate.migrate.errors import (
     PGDataDumpFailedError, PGDataNotFoundError, PGMigrateValidationFailedError, PGSchemaDumpFailedError, PGTooMuchDataError
 )
@@ -14,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from distutils.version import LooseVersion
 from pathlib import Path
+from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
@@ -39,6 +39,7 @@ class PGExtension:
     name: str
     version: str
     superuser: bool = True
+    trusted: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -142,7 +143,7 @@ class PGCluster:
 
     @contextmanager
     def _cursor(self, *, dbname: str = None) -> RealDictCursor:
-        conn: psycopg2.extensions.connection = None
+        conn: Optional[psycopg2.extensions.connection] = None
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
         if dbname:
             conn_info["dbname"] = dbname
@@ -161,7 +162,7 @@ class PGCluster:
 
     def c(
         self,
-        query: str,
+        query: Union[str, sql.Composable],
         *,
         args: Sequence[Any] = None,
         dbname: str = None,
@@ -276,15 +277,21 @@ class PGCluster:
     def pg_ext(self) -> List[PGExtension]:
         """Available extensions"""
         if self._pg_ext is None:
+            # Starting from PotsgreSQL 13, extensions have a trusted flag that means
+            # they can be created without being superuser.
+            trusted_field = ", extver.trusted" if self.version >= LooseVersion("13") else ""
             exts = self.c(
-                """
-                SELECT extver.name, extver.version, extver.superuser
+                f"""
+                SELECT extver.name, extver.version, extver.superuser {trusted_field}
                 FROM pg_catalog.pg_available_extension_versions extver
                 JOIN pg_catalog.pg_available_extensions ext
                     ON (extver.name = ext.name AND extver.version = ext.default_version)
                 """
             )
-            self._pg_ext = [PGExtension(name=e["name"], version=e["version"], superuser=e["superuser"]) for e in exts]
+            self._pg_ext = [
+                PGExtension(name=e["name"], version=e["version"], superuser=e["superuser"], trusted=e.get("trusted"))
+                for e in exts
+            ]
         return self._pg_ext
 
     @property
@@ -905,6 +912,8 @@ class PGMigrate:
                 # check if we can install this extension
                 if target_ext.name in self.target.pg_ext_whitelist:
                     self.log.info("Extension %r is whitelisted in target", target_ext.name)
+                elif target_ext.trusted:
+                    self.log.info("Extension %r is trusted in target", target_ext.name)
                 elif target_ext.superuser and not self.target.is_superuser:
                     msg = f"Installing extension {target_ext.name!r} in target requires superuser"
                     self.log.error(msg)

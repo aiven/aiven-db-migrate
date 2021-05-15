@@ -42,7 +42,7 @@ def test_defaults(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: boo
 def test_extension_requires_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
     source, target = pg_source_and_target
     dbname = random_string()
-    extname = "pgcrypto"
+    extname = "pg_stat_statements"
 
     source.create_db(dbname=dbname)
     source.create_extension(extname=extname, dbname=dbname)
