@@ -51,7 +51,7 @@ class PGRunner:
             "-o",
             "--encoding utf-8",
         )
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env={"TZ": "UTC"})
         return self
 
     def make_conf(self, **kwargs) -> PGRunner:
@@ -466,7 +466,12 @@ def fixture_pg_cluster(request):
     cluster_runner.drop_dbs()
 
 
-@pytest.fixture(name="pg_source_and_target", params=pg_source_and_target_for_tests, scope="function")
+@pytest.fixture(
+    name="pg_source_and_target",
+    params=pg_source_and_target_for_tests,
+    scope="function",
+    ids=["{}-{}".format(*entry) for entry in pg_source_and_target_for_tests]
+)
 def fixture_pg_source_and_target(request):
     source, target = request.param
     # run the fixture function
