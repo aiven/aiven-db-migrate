@@ -38,7 +38,7 @@ This installs console scripts which have the same interface as the library modul
 ## PostgreSQL
 
 Requirements:
- * `pg_dump`: from the PostgreSQL version where migrating from
+ * `pg_dump`: from any PostgreSQL version between the source and target versions
  * `psql`: any modern version should work
 
 Run library module:

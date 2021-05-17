@@ -1,33 +1,53 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-
+from distutils.version import LooseVersion
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
 import psycopg2
+import re
 import select
 import time
 
 
-def find_pgbin_dir(pgversion: str) -> Path:
-    def _pgbin_paths():
-        for p in (
-            "/usr/pgsql-{pgversion}/bin",
-            "/usr/lib/postgresql/{pgversion}/bin",
-        ):
-            yield p.format(pgversion=pgversion)
-            # try without minor too; 12.2 -> 12, 9.5.21 -> 9.5
-            if "." in pgversion:
-                yield p.format(pgversion=pgversion.rsplit(".", 1)[0])
+def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_dir: Path = Path("/usr")) -> Path:
+    """
+    Returns an existing pgbin directory with a version equal to `pgversion`.
 
-    pgbin_paths = list(_pgbin_paths())
-    for p in pgbin_paths:
-        pgbin = Path(p)
-        if pgbin.exists():
-            break
+    If `max_pgversion` is specified, returns the oldest existing pgbin directory with a version between
+    `pgversion` and `max_pgversion` included.
+
+    Versions equal or above 10 only check the major version number: 10, 11, 12, 13...
+
+    Version 9 also checks the minor version number: 9.3, 9.4, 9.5, 9.6.
+    """
+    min_version = LooseVersion(pgversion).version
+    max_version = min_version if max_pgversion is None else LooseVersion(max_pgversion).version
+    # We need a special case for versions 9:  The sub-version counts as a major version too
+    max_parts = 2 if min_version[0] == 9 else 1
+    candidates = []
+    search_scopes = [(usr_dir, r"pgsql-([0-9]+(\.[0-9]+)*)"), (usr_dir / "lib/postgresql", r"([0-9]+(\.[0-9]+)*)")]
+    for base_dir, pattern in search_scopes:
+        if base_dir.is_dir():
+            for path in base_dir.iterdir():
+                match = re.search(pattern, path.name)
+                bin_path = path / "bin"
+                if match and bin_path.is_dir():
+                    candidate_version = LooseVersion(match.group(1)).version
+                    if min_version[:max_parts] <= candidate_version[:max_parts] <= max_version[:max_parts]:
+                        candidates.append((candidate_version, bin_path))
+    candidates.sort()
+    if candidates:
+        return candidates[0][1]
+    search_scope_description = [str(search_scope[0] / search_scope[1] / "bin") for search_scope in search_scopes]
+    if max_pgversion is not None:
+        raise ValueError(
+            "Couldn't find bin dir for any pg version between {!r} and {!r}, tried {!r}".format(
+                pgversion, max_pgversion, search_scope_description
+            )
+        )
     else:
-        raise ValueError("Couldn't find pg version {!r} bin dir, tried: {!r}".format(pgversion, pgbin_paths))
-    return pgbin
+        raise ValueError("Couldn't find bin dir for pg version {!r}, tried {!r}".format(pgversion, search_scope_description))
 
 
 def validate_pg_identifier_length(ident: str):
