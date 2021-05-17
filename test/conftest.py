@@ -401,7 +401,7 @@ def inject_pg_fixture(*, name: str, pgversion: str, scope="module"):
     globals()[name] = generate_pg_fixture(name=name, pgversion=pgversion, scope=scope)
 
 
-SUPPORTED_PG_VERSIONS = ["9.5", "9.6", "10", "11", "12"]
+SUPPORTED_PG_VERSIONS = ["9.5", "9.6", "10", "11", "12", "13"]
 pg_cluster_for_tests: List[str] = list()
 pg_source_and_target_for_tests: List[Tuple[str, str]] = list()
 pg_source_and_target_for_replication_tests: List[Tuple[str, str]] = list()
