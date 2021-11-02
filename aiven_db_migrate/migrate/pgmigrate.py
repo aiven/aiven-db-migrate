@@ -1107,16 +1107,24 @@ class PGMigrate:
 
         self._dump_schema(db=pgtask.source_db)
         self.target.refresh_db(db=pgtask.source_db)
-        if self.source.replication_available:
+
+        fallback_to_dump = pgtask.method is None
+
+        # if method is not yet specified we'll try replication first and dump
+        # second
+        if self.source.replication_available and fallback_to_dump:
             pgtask.method = PGMigrateMethod.replication
+
+        if pgtask.method == PGMigrateMethod.replication:
             try:
                 return self._db_replication(db=pgtask.source_db)
             except psycopg2.ProgrammingError as err:
-                if err.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE:
+                if err.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE and fallback_to_dump:
                     self.log.warning("Logical replication failed with error: %r, fallback to dump", err.diag.message_primary)
                 else:
                     # unexpected error
                     raise
+
         pgtask.method = PGMigrateMethod.dump
         return self._dump_data(db=pgtask.source_db)
 
@@ -1156,7 +1164,7 @@ class PGMigrate:
             self.log.error(err)
             raise PGMigrateValidationFailedError(str(err)) from err
 
-    def migrate(self) -> PGMigrateResult:
+    def migrate(self, force_method: Optional[PGMigrateMethod] = None) -> PGMigrateResult:
         """Migrate source database(s) to target"""
         self.validate()
 
@@ -1200,7 +1208,7 @@ class PGMigrate:
         with futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aiven_db_migrate") as executor:
             for source_db in self.source.databases.values():
                 target_db = self.target.databases.get(source_db.dbname)
-                pgtask: PGMigrateTask = PGMigrateTask(source_db=source_db, target_db=target_db)
+                pgtask: PGMigrateTask = PGMigrateTask(source_db=source_db, target_db=target_db, method=force_method)
                 task: futures.Future = executor.submit(self._db_migrate, pgtask=pgtask)
                 tasks[task] = pgtask
                 task.add_done_callback(pgtask.resolve)
@@ -1288,6 +1296,12 @@ def main(args=None, *, prog="pg_migrate"):
         action="store_false",
         help="Do not add tables belonging to extensions to the publication definition"
     )
+    parser.add_argument(
+        "--force-method",
+        default=None,
+        help="Force the migration method to be used as either replication or dump.",
+    )
+
     args = parser.parse_args(args)
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
     if args.debug:
@@ -1308,10 +1322,18 @@ def main(args=None, *, prog="pg_migrate"):
         with_tables=args.with_table,
         replicate_extensions=args.replicate_extension_tables,
     )
+
+    method = None
+    if args.force_method:
+        try:
+            method = PGMigrateMethod[args.force_method]
+        except KeyError as e:
+            raise ValueError(f"Unsupported migration method '{args.force_method}'") from e
+
     if args.validate:
         pg_mig.validate()
     else:
-        result: PGMigrateResult = pg_mig.migrate()
+        result: PGMigrateResult = pg_mig.migrate(force_method=method)
         print()
         print("Roles:")
         for role in result.pg_roles.values():
