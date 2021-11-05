@@ -28,6 +28,7 @@ import psycopg2.extras
 import random
 import string
 import subprocess
+import sys
 import threading
 import time
 
@@ -1344,13 +1345,18 @@ def main(args=None, *, prog="pg_migrate"):
             )
         print()
         print("Databases:")
+        has_failures = False
         for db in result.pg_databases.values():
+            if db["status"] == PGMigrateStatus.failed:
+                has_failures = True
             print(
                 "  dbaname: {!r}, method: {!r}, status: {!r}, message: {!r}".format(
                     db["dbname"], db["method"], db["status"], db["message"]
                 )
             )
         print()
+        if has_failures:
+            sys.exit("Database migration did not succeed")
 
 
 if __name__ == "__main__":
