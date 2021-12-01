@@ -12,7 +12,7 @@ def test_pgbin_dir_exists_for_supported_versions():
     for pgversion in ("9.5", "9.6", "10", "10.4", "11", "11.7", "12", "12.2", "13"):
         find_pgbin_dir(pgversion)
     for pgversion in ("12345", "12345.6"):
-        with pytest.raises(ValueError, match=f"Couldn't find bin dir for pg version '{pgversion}'.*") as err:
+        with pytest.raises(ValueError, match=f"Couldn't find bin dir for pg version '{pgversion}'.*"):
             find_pgbin_dir(pgversion)
 
 

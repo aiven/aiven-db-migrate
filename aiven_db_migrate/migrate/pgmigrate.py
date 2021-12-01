@@ -136,6 +136,7 @@ class PGCluster:
         return create_connection_string(conn_info)
 
     def connect_timeout(self):
+
         try:
             return int(self.conn_info.get("connect_timeout", os.environ.get("PGCONNECT_TIMEOUT", "")))
         except ValueError:
@@ -468,7 +469,7 @@ class PGSource(PGCluster):
 
     def replication_in_sync(self, *, dbname: str, slotname: str, max_replication_lag: int) -> Tuple[bool, str]:
         exists = self.c(
-            f"SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
+            "SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
         )
         if not exists:
             self.log.warning("Replication slot %r doesn't exist in database %r", slotname, dbname)
@@ -569,7 +570,7 @@ class PGTarget(PGCluster):
 
     def replication_in_sync(self, *, dbname: str, subname: str, write_lsn: str, max_replication_lag: int) -> bool:
         status = self.c(
-            f"""
+            """
             SELECT stat.*,
             pg_wal_lsn_diff(stat.received_lsn, %s)::BIGINT AS replication_lag
             FROM pg_catalog.pg_stat_subscription stat
@@ -1020,6 +1021,7 @@ class PGMigrate:
             dbname = None
 
         self.log.info("Dumping schema from database %r", dbname)
+
         pg_dump_cmd = [
             str(self.pgbin / "pg_dump"),
             # Setting owner requires superuser when generated script is run or the same user that owns
@@ -1031,6 +1033,7 @@ class PGMigrate:
             "--schema-only",
             self.source.conn_str(dbname=dbname),
         ]
+
         if self.createdb:
             pg_dump_cmd.insert(-1, "--create")
             # db is created and connected
@@ -1273,13 +1276,19 @@ def main(args=None, *, prog="pg_migrate"):
     )
     parser.add_argument(
         "--replicate-extension-tables",
+        dest="replicate_extension_tables",
         action="store_true",
         default=True,
-        help="Whether logical replication should try to add tables "
-        "belonging to extensions to the publication definition"
+        help="logical replication should try to add tables "
+        "belonging to extensions to the publication definition (default)"
+    )
+    parser.add_argument(
+        "--no-replicate-extension-tables",
+        dest="replicate_extension_tables",
+        action="store_false",
+        help="Do not add tables belonging to extensions to the publication definition"
     )
     args = parser.parse_args(args)
-
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
     if args.debug:
         logging.basicConfig(level=logging.DEBUG, format=log_format)

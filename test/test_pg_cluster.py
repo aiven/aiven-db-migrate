@@ -3,7 +3,6 @@ from aiven_db_migrate.migrate.pgmigrate import PGCluster
 from distutils.version import LooseVersion
 from multiprocessing import Process
 from test.conftest import PGRunner
-from typing import Tuple
 
 import os
 import pytest
