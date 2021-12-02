@@ -118,6 +118,8 @@ can be used together with `--stop-replication` to clean up all created pub/sub o
 With `--validate` only best effort validation is run. This checks e.g. PL/pgSQL languages, extensions etc. installed
 in source are also installed/available in target.
 
+Use `--no-replicate-extension-tables` to skip extension tables.  By default it attempts to replicate all extension tables during logical replication.
+
 ### API example
 
 Migrating from AWS RDS to Aiven for PostgreSQL. Logical replication is enabled in source AWS RDS PostgreSQL

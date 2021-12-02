@@ -35,7 +35,7 @@ def test_extension_table_filtering(
     )
     for t in tables:
         pg_mig.source.c(f"CREATE TABLE {t} (foo int)", return_rows=0, dbname=db_name)
-    pg_mig.source.c(f"CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=db_name)
+    pg_mig.source.c("CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=db_name)
     # pylint: disable=protected-access
     pg_mig.source._set_db(dbname=db_name)
     # pylint: enable=protected-access
@@ -63,7 +63,7 @@ def test_extension_table_filtering(
     )
     for t in tables:
         pg_mig.source.c(f"CREATE TABLE {t} (foo int)", return_rows=0, dbname=other_db_name)
-    pg_mig.source.c(f"CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=other_db_name)
+    pg_mig.source.c("CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=other_db_name)
     # pylint: disable=protected-access
     pg_mig.source._set_db(dbname=other_db_name)
     # pylint: enable=protected-access
