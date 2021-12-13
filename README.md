@@ -120,6 +120,8 @@ in source are also installed/available in target.
 
 Use `--no-replicate-extension-tables` to skip extension tables.  By default it attempts to replicate all extension tables during logical replication.
 
+With `--force-method` you can specify if you wish to use either replication or dump method. Otherwise the most suitable method is chosen automatically.
+
 ### API example
 
 Migrating from AWS RDS to Aiven for PostgreSQL. Logical replication is enabled in source AWS RDS PostgreSQL
