@@ -122,6 +122,8 @@ Use `--no-replicate-extension-tables` to skip extension tables.  By default it a
 
 With `--force-method` you can specify if you wish to use either replication or dump method. Otherwise the most suitable method is chosen automatically.
 
+Using `--dbs-max-total-size` together with `--validate` you can check if the size of the source database in below some threshold.
+
 ### API example
 
 Migrating from AWS RDS to Aiven for PostgreSQL. Logical replication is enabled in source AWS RDS PostgreSQL
