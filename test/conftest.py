@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiven_db_migrate.migrate.pgutils import find_pgbin_dir
 from contextlib import contextmanager
+from copy import copy
 from datetime import datetime
 from distutils.version import LooseVersion
 from pathlib import Path
@@ -423,7 +424,9 @@ def generate_fixtures():
         assert version in SUPPORTED_PG_VERSIONS, f"Supported pg versions are: {SUPPORTED_PG_VERSIONS}"
         pg_target_versions.append(version)
     else:
-        pg_target_versions = SUPPORTED_PG_VERSIONS
+        # We do not support PG 9.5 as target
+        pg_target_versions = copy(SUPPORTED_PG_VERSIONS)
+        pg_target_versions.remove("9.5")
 
     for source in pg_source_versions:
         name_prefix = "pg{}".format(source.replace(".", ""))
