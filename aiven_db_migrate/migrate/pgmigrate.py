@@ -766,7 +766,7 @@ class PGMigrate:
                 )
         return ret
 
-    def filter_tables(self, db: PGDatabase) -> List[str]:
+    def filter_tables(self, db: PGDatabase) -> Optional[List[str]]:
         """
             Given a database, it will attempt to return a list of tables that should be data dumped / replicated
             based on the skip table list, with table list and the replicate extensions flag
@@ -779,7 +779,7 @@ class PGMigrate:
             "Filtering tables for db %r, and skip tables %r and with tables %r", db, self.skip_tables, self.with_tables
         )
         if not self.skip_tables and not self.with_tables and self.replicate_extensions:
-            return []
+            return None
         if not db.tables:
             return []
         ret: Set[PGTable] = set()
@@ -1053,7 +1053,8 @@ class PGMigrate:
             "--data-only",
             self.source.conn_str(dbname=dbname),
         ]
-        pg_dump_cmd.extend([f"--table={w}" for w in self.filter_tables(db)])
+        tables = self.filter_tables(db) or []
+        pg_dump_cmd.extend([f"--table={w}" for w in tables])
         subtask: PGSubTask = self._pg_dump_pipe_psql(
             pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname)
         )
@@ -1076,7 +1077,8 @@ class PGMigrate:
         dbname = db.dbname
         pubname = slotname = subname = None
         try:
-            pubname = self.source.create_publication(dbname=dbname, only_tables=self.filter_tables(db))
+            tables = self.filter_tables(db) or []
+            pubname = self.source.create_publication(dbname=dbname, only_tables=tables)
             slotname = self.source.create_replication_slot(dbname=dbname)
             subname = self.target.create_subscription(
                 conn_str=self.source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
