@@ -50,7 +50,7 @@ or, if installed:
 $ pg_migrate -h
 ```
 
-Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 9.5 to PostgreSQL 13.
+Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 9.5 to PostgreSQL 14.
 Migrating to older version is not supported.
 
 Supports regular data dump (`pg_dump`) and [logical replication](https://www.postgresql.org/docs/current/logical-replication.html) (PostgreSQL 10 or newer).
