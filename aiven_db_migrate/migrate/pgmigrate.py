@@ -389,6 +389,18 @@ class PGCluster:
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
+    def get_size(self, *, dbname, only_tables: Optional[List[str]] = None) -> float:
+        if only_tables == []:
+            return 0
+        if only_tables is not None:
+            query = "SELECT SUM(pg_total_relation_size(tablename)) AS size FROM UNNEST(%s) AS tablename"
+            args = [only_tables]
+        else:
+            query = "SELECT pg_database_size(oid) AS size FROM pg_catalog.pg_database WHERE datname = %s"
+            args = [dbname]
+        result = self.c(query, args=args, dbname=dbname)
+        return result[0]["size"] or 0
+
     def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
         mangled_name = self.mangle_db_name(dbname)
         pubname = f"aiven_db_migrate_{mangled_name}_pub"
@@ -766,7 +778,7 @@ class PGMigrate:
                 )
         return ret
 
-    def filter_tables(self, db: PGDatabase) -> List[str]:
+    def filter_tables(self, db: PGDatabase) -> Optional[List[str]]:
         """
             Given a database, it will attempt to return a list of tables that should be data dumped / replicated
             based on the skip table list, with table list and the replicate extensions flag
@@ -779,7 +791,7 @@ class PGMigrate:
             "Filtering tables for db %r, and skip tables %r and with tables %r", db, self.skip_tables, self.with_tables
         )
         if not self.skip_tables and not self.with_tables and self.replicate_extensions:
-            return []
+            return None
         if not db.tables:
             return []
         ret: Set[PGTable] = set()
@@ -851,6 +863,17 @@ class PGMigrate:
                     self.log.info("Database %r already exists in target but access is rejected", dbname)
                 else:
                     self.log.info("Database %r already exists in target", dbname)
+
+    def _check_database_size(self, max_size: float):
+        dbs_size = 0
+        for dbname, source_db in self.source.databases.items():
+            only_tables = self.filter_tables(db=source_db)
+            db_size = self.source.get_size(dbname=dbname, only_tables=only_tables)
+            dbs_size += db_size
+        if dbs_size > max_size:
+            raise PGMigrateValidationFailedError(
+                f"Databases do not fit to the required maximum size ({dbs_size} > {max_size})"
+            )
 
     def _check_pg_lang(self):
         source_lang = {lan["lanname"] for lan in self.source.pg_lang}
@@ -1053,7 +1076,8 @@ class PGMigrate:
             "--data-only",
             self.source.conn_str(dbname=dbname),
         ]
-        pg_dump_cmd.extend([f"--table={w}" for w in self.filter_tables(db)])
+        tables = self.filter_tables(db) or []
+        pg_dump_cmd.extend([f"--table={w}" for w in tables])
         subtask: PGSubTask = self._pg_dump_pipe_psql(
             pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname)
         )
@@ -1076,7 +1100,8 @@ class PGMigrate:
         dbname = db.dbname
         pubname = slotname = subname = None
         try:
-            pubname = self.source.create_publication(dbname=dbname, only_tables=self.filter_tables(db))
+            tables = self.filter_tables(db) or []
+            pubname = self.source.create_publication(dbname=dbname, only_tables=tables)
             slotname = self.source.create_replication_slot(dbname=dbname)
             subname = self.target.create_subscription(
                 conn_str=self.source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
@@ -1129,7 +1154,7 @@ class PGMigrate:
         pgtask.method = PGMigrateMethod.dump
         return self._dump_data(db=pgtask.source_db)
 
-    def validate(self):
+    def validate(self, dbs_max_total_size: Optional[float] = None):
         """
         Do best effort validation whether all the bits and pieces are in place for migration to succeed.
         * Migrating to same server is not supported (doable but requires obviously different dbname)
@@ -1154,6 +1179,8 @@ class PGMigrate:
             # but it can be newer than the source version: source <= pgdump <= target
             self.pgbin = find_pgbin_dir(str(self.source.version), max_pgversion=str(self.target.version))
             self._check_databases()
+            if dbs_max_total_size is not None:
+                self._check_database_size(max_size=dbs_max_total_size)
             self._check_pg_lang()
             self._check_pg_ext()
         except KeyError as err:
@@ -1302,6 +1329,12 @@ def main(args=None, *, prog="pg_migrate"):
         default=None,
         help="Force the migration method to be used as either replication or dump.",
     )
+    parser.add_argument(
+        "--dbs-max-total-size",
+        type=int,
+        default=-1,
+        help="Max total size of databases to be migrated, ignored by default",
+    )
 
     args = parser.parse_args(args)
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1332,7 +1365,8 @@ def main(args=None, *, prog="pg_migrate"):
             raise ValueError(f"Unsupported migration method '{args.force_method}'") from e
 
     if args.validate:
-        pg_mig.validate()
+        dbs_max_total_size = None if args.dbs_max_total_size == -1 else args.dbs_max_total_size
+        pg_mig.validate(dbs_max_total_size=dbs_max_total_size)
     else:
         result: PGMigrateResult = pg_mig.migrate(force_method=method)
         print()
