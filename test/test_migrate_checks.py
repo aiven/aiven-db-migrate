@@ -1,13 +1,36 @@
 # Copyright (c) 2021 Aiven, Helsinki, Finland. https://aiven.io/
-
-from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
+from aiven_db_migrate.migrate.errors import PGMigrateFailureReason, PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
+from distutils.version import LooseVersion
 from test.conftest import PGRunner
 from test.utils import random_string
 from typing import Tuple
 from unittest.mock import patch
 
 import pytest
+
+
+# our fixtures are created with the (apparently intentional) constraint of source <= target, but we need to trigger
+# the reverse case as well.
+@pytest.mark.parametrize("reverse_source_target", [True, False])
+def test_dbs_migration_succeeds_or_fails(pg_source_and_target: Tuple[PGRunner, PGRunner], reverse_source_target: bool):
+    source, target = reversed(pg_source_and_target) if reverse_source_target else pg_source_and_target
+    source_version = LooseVersion(source.pgversion)
+    target_version = LooseVersion(target.pgversion)
+
+    pg_mig = PGMigrate(
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=False,
+        verbose=True,
+    )
+
+    try:
+        pg_mig.validate()
+        assert target_version >= source_version, "Migration should succeed only when target version >= source version"
+    except PGMigrateValidationFailedError as e:
+        assert target_version < source_version, "Migration should fail only when target version < source version"
+        assert e.reason == PGMigrateFailureReason.cannot_migrate_to_older_server_version
 
 
 def test_dbs_max_total_size_check(pg_source_and_target: Tuple[PGRunner, PGRunner]):

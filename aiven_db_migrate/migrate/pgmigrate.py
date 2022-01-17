@@ -1,6 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 from aiven_db_migrate.migrate.errors import (
-    PGDataDumpFailedError, PGDataNotFoundError, PGMigrateValidationFailedError, PGSchemaDumpFailedError, PGTooMuchDataError
+    PGDataDumpFailedError, PGDataNotFoundError, PGMigrateFailureReason, PGMigrateValidationFailedError,
+    PGSchemaDumpFailedError, PGTooMuchDataError
 )
 from aiven_db_migrate.migrate.pgutils import (
     create_connection_string, find_pgbin_dir, get_connection_info, validate_pg_identifier_length, wait_select
@@ -1174,7 +1175,10 @@ class PGMigrate:
             ):
                 raise PGMigrateValidationFailedError("Migrating to the same server is not supported")
             if self.source.version > self.target.version:
-                raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
+                raise PGMigrateValidationFailedError(
+                    "Migrating to older PostgreSQL server version is not supported",
+                    reason=PGMigrateFailureReason.cannot_migrate_to_older_server_version
+                )
             # pgdump cannot be older than the source version, cannot be newer than the target version
             # but it can be newer than the source version: source <= pgdump <= target
             self.pgbin = find_pgbin_dir(str(self.source.version), max_pgversion=str(self.target.version))
