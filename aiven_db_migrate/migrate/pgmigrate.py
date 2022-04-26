@@ -992,18 +992,23 @@ class PGMigrate:
                     message=err.diag.message_primary,
                 )
             else:
-                if role.rolconfig:
-                    for conf in role.rolconfig:
-                        key, value = conf.split("=", 1)
-                        self.log.info("Setting config for role %r: %s = %s", role.rolname, key, value)
-                        self.target.c(f'ALTER ROLE {role.safe_rolname} SET "{key}" = %s', args=(value, ), return_rows=0)
-                roles[role.rolname] = PGRoleTask(
-                    rolname=rolname,
-                    rolpassword=role.rolpassword,
-                    status=PGRoleStatus.created,
-                    message="role created",
-                )
-
+                try:
+                    if role.rolconfig:
+                        for conf in role.rolconfig:
+                            key, value = conf.split("=", 1)
+                            self.log.info("Setting config for role %r: %s = %s", role.rolname, key, value)
+                            self.target.c(f'ALTER ROLE {role.safe_rolname} SET "{key}" = %s', args=(value, ), return_rows=0)
+                    roles[role.rolname] = PGRoleTask(
+                        rolname=rolname,
+                        rolpassword=role.rolpassword,
+                        status=PGRoleStatus.created,
+                        message="role created",
+                    )
+                # display warning when ProgrammingErrorERROR 42501: InsufficientPrivilege: permission denied to set parameter for a role
+                except psycopg2.errors.InsufficientPrivilege:
+                    self.log.warning(
+                        f'Setting [{role.rolname}]: [{key}] = [{value}] failed. psycopg2.errors.InsufficientPrivilege'
+                    )
         return roles
 
     @staticmethod
