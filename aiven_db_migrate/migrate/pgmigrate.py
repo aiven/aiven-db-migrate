@@ -108,7 +108,13 @@ class PGCluster:
     _pg_roles: Dict[str, PGRole]
     _mangle: bool
 
-    def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None, mangle: bool = False):
+    def __init__(
+        self,
+        conn_info: Union[str, Dict[str, Any]],
+        filtered_db: Optional[str] = None,
+        filtered_roles: Optional[str] = None,
+        mangle: bool = False
+    ):
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
@@ -125,6 +131,10 @@ class PGCluster:
             self.filtered_db = filtered_db.split(",")
         else:
             self.filtered_db = []
+        if filtered_roles:
+            self.filtered_roles = filtered_roles.split(",")
+        else:
+            self.filtered_roles = []
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
@@ -318,9 +328,16 @@ class PGCluster:
 
     @property
     def pg_roles(self) -> Dict[str, PGRole]:
+        filtered_roles = ["rdstopmgr"]
+        if self.filtered_roles:
+            filtered_roles.extend(self.filtered_roles)
+        roles_list = ",".join(f"'{role}'" for role in filtered_roles)
+
         if not self._pg_roles:
             # exclude system roles
-            roles = self.c("SELECT quote_ident(rolname) as safe_rolname, * FROM pg_catalog.pg_roles WHERE oid > 16384")
+            roles = self.c(
+                f"SELECT quote_ident(rolname) as safe_rolname, * FROM pg_catalog.pg_roles WHERE oid > 16384 AND rolname NOT IN ({roles_list})"
+            )
             for r in roles:
                 rolname = r["rolname"]
                 # create semi-random placeholder password for role with login
@@ -738,6 +755,7 @@ class PGMigrate:
         verbose: bool = False,
         mangle: bool = False,
         filtered_db: Optional[str] = None,
+        filtered_roles: Optional[str] = None,
         skip_tables: Optional[List[str]] = None,
         with_tables: Optional[List[str]] = None,
         replicate_extensions: bool = True,
@@ -745,8 +763,12 @@ class PGMigrate:
         if skip_tables and with_tables:
             raise Exception("Can only specify a skip table list or a with table list")
         self.log = logging.getLogger(self.__class__.__name__)
-        self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db, mangle=mangle)
-        self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
+        self.source = PGSource(
+            conn_info=source_conn_info, filtered_db=filtered_db, filtered_roles=filtered_roles, mangle=mangle
+        )
+        self.target = PGTarget(
+            conn_info=target_conn_info, filtered_db=filtered_db, filtered_roles=filtered_roles, mangle=mangle
+        )
         self.skip_tables = self._convert_table_names(skip_tables)
         self.with_tables = self._convert_table_names(with_tables)
         self.pgbin = Path()
@@ -1007,7 +1029,7 @@ class PGMigrate:
                 # display warning when ProgrammingErrorERROR 42501: InsufficientPrivilege: permission denied to set parameter for a role
                 except psycopg2.errors.InsufficientPrivilege:
                     self.log.warning(
-                        f'Setting [{role.rolname}]: [{key}] = [{value}] failed. psycopg2.errors.InsufficientPrivilege'
+                        f'Setting [{role.rolname}]: [{key}] = [{value}] failed.  psycopg2.errors.InsufficientPrivilege'
                     )
         return roles
 
@@ -1269,6 +1291,9 @@ def main(args=None, *, prog="pg_migrate"):
         "-t", "--target", help="Target PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
     )
     parser.add_argument(
+        "-fr", "--filtered-roles", help="Comma separated list of roles to filter out during migrations", required=False
+    )
+    parser.add_argument(
         "-f", "--filtered-db", help="Comma separated list of databases to filter out during migrations", required=False
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
@@ -1356,6 +1381,7 @@ def main(args=None, *, prog="pg_migrate"):
         stop_replication=args.stop_replication,
         verbose=args.verbose,
         filtered_db=args.filtered_db,
+        filtered_roles=args.filtered_roles,
         mangle=args.mangle,
         skip_tables=args.skip_table,
         with_tables=args.with_table,
