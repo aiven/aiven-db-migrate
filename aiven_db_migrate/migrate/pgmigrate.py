@@ -112,7 +112,7 @@ class PGCluster:
         self,
         conn_info: Union[str, Dict[str, Any]],
         filtered_db: Optional[str] = None,
-        filtered_roles: Optional[str] = None,
+        filtered_roles: Tuple[str] = ((), ),
         mangle: bool = False
     ):
         self.log = logging.getLogger(self.__class__.__name__)
@@ -131,10 +131,8 @@ class PGCluster:
             self.filtered_db = filtered_db.split(",")
         else:
             self.filtered_db = []
-        if filtered_roles:
-            self.filtered_roles = filtered_roles.split(",")
-        else:
-            self.filtered_roles = []
+        self.filtered_roles = filtered_roles
+
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
@@ -328,18 +326,19 @@ class PGCluster:
 
     @property
     def pg_roles(self) -> Dict[str, PGRole]:
-        filtered_roles = ["rdstopmgr"]
-        if self.filtered_roles:
-            filtered_roles.extend(self.filtered_roles)
-        roles_list = ",".join(f"'{role}'" for role in filtered_roles)
 
         if not self._pg_roles:
             # exclude system roles
-            roles = self.c(
-                f"SELECT quote_ident(rolname) as safe_rolname, * FROM pg_catalog.pg_roles WHERE oid > 16384 AND rolname NOT IN ({roles_list})"
-            )
+            roles = self.c(f"SELECT quote_ident(rolname) as safe_rolname, * FROM pg_catalog.pg_roles WHERE oid > 16384")
+
             for r in roles:
                 rolname = r["rolname"]
+
+                if rolname in self.filtered_roles:
+                    self.log.debug(f'Skipping filtered role: [{r["rolname"]}]')
+                    continue
+
+                self.log.debug(f'Migrating role: [{r["rolname"]}]')
                 # create semi-random placeholder password for role with login
                 rolpassword = (
                     "placeholder_{}".format("".join(random.choices(string.ascii_lowercase, k=16)))
@@ -755,7 +754,7 @@ class PGMigrate:
         verbose: bool = False,
         mangle: bool = False,
         filtered_db: Optional[str] = None,
-        filtered_roles: Optional[str] = None,
+        filtered_roles: Tuple[str] = ((), ),
         skip_tables: Optional[List[str]] = None,
         with_tables: Optional[List[str]] = None,
         replicate_extensions: bool = True,
@@ -1372,6 +1371,9 @@ def main(args=None, *, prog="pg_migrate"):
         logging.basicConfig(level=logging.DEBUG, format=log_format)
     else:
         logging.basicConfig(level=logging.INFO, format=log_format)
+
+    if not args.filtered_roles:
+        args.filtered_roles = ()
 
     pg_mig = PGMigrate(
         source_conn_info=args.source,
