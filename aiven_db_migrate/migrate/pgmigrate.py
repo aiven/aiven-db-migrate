@@ -731,6 +731,7 @@ class PGMigrate:
         *,
         source_conn_info: Union[str, Dict[str, Any]],
         target_conn_info: Union[str, Dict[str, Any]],
+        pgbin: Optional[str] = None,
         createdb: bool = True,
         max_workers: int = DEFAULT_MAX_WORKERS,
         max_replication_lag: int = -1,
@@ -749,7 +750,10 @@ class PGMigrate:
         self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
         self.skip_tables = self._convert_table_names(skip_tables)
         self.with_tables = self._convert_table_names(with_tables)
-        self.pgbin = Path()
+        if pgbin is None:
+            self.pgbin = pgbin
+        else:
+            self.pgbin = Path(pgbin)
         # include commands to create db in pg_dump output
         self.createdb = createdb
         # TODO: have "--max-workers" in CLI
@@ -1177,7 +1181,10 @@ class PGMigrate:
                 raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
             # pgdump cannot be older than the source version, cannot be newer than the target version
             # but it can be newer than the source version: source <= pgdump <= target
-            self.pgbin = find_pgbin_dir(str(self.source.version), max_pgversion=str(self.target.version))
+
+            if self.pgbin is None:
+                self.pgbin = find_pgbin_dir(str(self.source.version), max_pgversion=str(self.target.version))
+
             self._check_databases()
             if dbs_max_total_size is not None:
                 self._check_database_size(max_size=dbs_max_total_size)
@@ -1335,6 +1342,12 @@ def main(args=None, *, prog="pg_migrate"):
         default=-1,
         help="Max total size of databases to be migrated, ignored by default",
     )
+    parser.add_argument(
+        "--pgbin",
+        type=str,
+        default=None,
+        help="Path to pg_dump and other postgresql binaries",
+    )
 
     args = parser.parse_args(args)
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1346,6 +1359,7 @@ def main(args=None, *, prog="pg_migrate"):
     pg_mig = PGMigrate(
         source_conn_info=args.source,
         target_conn_info=args.target,
+        pgbin=args.pgbin,
         createdb=args.createdb,
         max_replication_lag=args.max_replication_lag,
         stop_replication=args.stop_replication,
