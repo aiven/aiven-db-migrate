@@ -152,6 +152,10 @@ PGMigrateResult(pg_databases={'rdsadmin': {'dbname': 'rdsadmin', 'message': 'FAT
  * superuser or superuser-like privileges, such as `rds_replication` role in AWS RDS, in both source and target
  * [AWS RDS additional settings/info](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication)
 
+#### Warning
+
+⚠️ Large objects are [unable to be replicated using logical replication](https://www.postgresql.org/docs/15/logical-replication-restrictions.html), up to and including PostgreSQL 15.
+
 ### Schemas
  * schemas are migrated without object ownership; the user used for migration is given all object ownership
  * NOTE: schema changes break logical replication
