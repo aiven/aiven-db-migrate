@@ -5,7 +5,7 @@ from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from test.conftest import PGRunner
 from test.utils import random_string
 from typing import Tuple
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -111,3 +111,35 @@ def test_dbs_max_total_size_check(pg_source_and_target: Tuple[PGRunner, PGRunner
 
         # Should easily fit
         pg_mig.validate(dbs_max_total_size=1073741824)
+
+
+def test_large_object_warnings(pg_source_and_target: Tuple[PGRunner, PGRunner]):
+    source, target = pg_source_and_target
+    dbnames = {random_string() for _ in range(3)}
+    for dbname in dbnames:
+        source.create_db(dbname=dbname)
+        target.create_db(dbname=dbname)
+    dbnames.add(source.defaultdb)
+    dbnames.add(target.defaultdb)
+
+    pg_mig = PGMigrate(
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=False,
+        verbose=True,
+    )
+
+    pg_mig.log = MagicMock()
+
+    # Create a large object in the source
+    with source.cursor(dbname=source.defaultdb) as cur:
+        cur.execute("SELECT lo_create(0)")
+
+    with patch(
+        "aiven_db_migrate.migrate.pgmigrate.PGMigrate._check_pg_lobs", side_effect=pg_mig._check_pg_lobs
+    ) as mock_lobs_check:
+        pg_mig.validate()
+        mock_lobs_check.assert_called_once()
+        pg_mig.log.warning.assert_called_with(
+            "Large objects detected: large objects are not compatible with logical replication: https://www.postgresql.org/docs/14/logical-replication-restrictions.html"
+        )

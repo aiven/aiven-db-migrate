@@ -137,7 +137,6 @@ class PGCluster:
         return create_connection_string(conn_info)
 
     def connect_timeout(self):
-
         try:
             return int(self.conn_info.get("connect_timeout", os.environ.get("PGCONNECT_TIMEOUT", "")))
         except ValueError:
@@ -513,6 +512,13 @@ class PGSource(PGCluster):
 
         self.log.warning("Replication status not available for %r in database %r", slotname, dbname)
         return False, ""
+
+    def large_objects_present(self, *, dbname: str) -> bool:
+        result = self.c("SELECT EXISTS(SELECT 1 FROM pg_largeobject_metadata)", dbname=dbname)
+        if result:
+            return result[0]["exists"]
+        self.log.warning("Unable to determine if large objects present in database %r", dbname)
+        return False
 
     def cleanup(self, *, dbname: str, pubname: str, slotname: str):
         # publications as per database so connect to correct database
@@ -954,6 +960,16 @@ class PGMigrate:
                     dbname
                 )
 
+    def _check_pg_lobs(self):
+        for source_db in self.source.databases.values():
+            if source_db.error:
+                # access failed/rejected, skip lobs check
+                continue
+            if self.source.large_objects_present(dbname=source_db.dbname):
+                self.log.warning(
+                    "Large objects detected: large objects are not compatible with logical replication: https://www.postgresql.org/docs/14/logical-replication-restrictions.html"
+                )
+
     def _migrate_roles(self) -> Dict[str, PGRoleTask]:
         roles: Dict[str, PGRoleTask] = dict()
         rolname: str
@@ -1168,6 +1184,7 @@ class PGMigrate:
         * Check that all languages installed in source are also available in target
         * Check that all extensions installed in source databases are either installed or available for installation
           in target
+        * Check that large objects are not present in the source database. If present, log a warning.
         """
         try:
             if self.stop_replication and self.max_replication_lag < 0:
@@ -1190,6 +1207,7 @@ class PGMigrate:
                 self._check_database_size(max_size=dbs_max_total_size)
             self._check_pg_lang()
             self._check_pg_ext()
+            self._check_pg_lobs()
         except KeyError as err:
             raise PGMigrateValidationFailedError("Invalid source or target connection string") from err
         except ValueError as err:
