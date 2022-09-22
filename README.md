@@ -15,6 +15,27 @@ Currently this tool supports only PostgreSQL but we aim to add support for other
 
 Requires Python 3.5 or newer.
 
+## Installation
+Get up and running quickly by using the steps below...
+
+**Prerequistes**
+
+Recommended to use **Fedora Linux Distrubution** or you might need to install additional packages/perform additional steps than those listed below
+- Python 3.5 or newer
+- Python Pip
+- Git
+- make
+- psycopg2-binary
+
+**Initialization**
+```
+$ git clone https://github.com/Sonoran-Software/aiven-db-migrate.git
+$ cd aiven-db-migrate
+$ make
+$ pip install .
+$ python3 -m aiven_db_migrate.migrate -h
+```
+
 ## Usage
 
 Running library module:
