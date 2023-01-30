@@ -1,7 +1,7 @@
 
 PYTHON ?= python3
 PYTHON_SOURCE_DIRS = aiven_db_migrate/ test/
-PG_VERSIONS = 95 96 10 11 12 13 14
+PG_VERSIONS = 10 11 12 13 14
 
 generated = aiven_db_migrate/migrate/version.py
 

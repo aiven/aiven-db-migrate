@@ -50,7 +50,7 @@ or, if installed:
 $ pg_migrate -h
 ```
 
-Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 9.5 to PostgreSQL 14.
+Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 10 to PostgreSQL 14.
 Migrating to older version is not supported.
 
 By default it searches `pg_dump` under `/usr/`, when using PostgreSQL installs on different directory such as on Mac, use `--pgbin` parameter to define PostgreSQL home directory. e,g,

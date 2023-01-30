@@ -9,7 +9,7 @@ import tempfile
 
 
 def test_pgbin_dir_exists_for_supported_versions():
-    for pgversion in ("9.5", "9.6", "10", "10.4", "11", "11.7", "12", "12.2", "13", "14"):
+    for pgversion in ("10", "10.4", "11", "11.7", "12", "12.2", "13", "14"):
         find_pgbin_dir(pgversion)
     for pgversion in ("12345", "12345.6"):
         with pytest.raises(ValueError, match=f"Couldn't find bin dir for pg version '{pgversion}'.*"):
@@ -36,28 +36,6 @@ def test_find_pgbin_dir(pg_dir):
             assert find_pgbin_dir("13", usr_dir=usr_dir)
         with pytest.raises(ValueError):
             assert find_pgbin_dir("13", max_pgversion="14", usr_dir=usr_dir)
-
-
-@pytest.mark.parametrize("pg_dir", ["pgsql-9.6", "pgsql-9.6.33", "lib/postgresql/9.6", "lib/postgresql/9.6.33"])
-def test_find_pgbin_dir_version_9(pg_dir):
-    with tempfile.TemporaryDirectory() as temp_dir:
-        usr_dir = Path(temp_dir)
-        pgbin_96 = usr_dir / pg_dir / "bin"
-        pgbin_96.mkdir(parents=True)
-        with pytest.raises(ValueError):
-            find_pgbin_dir("9.4", usr_dir=usr_dir)
-        with pytest.raises(ValueError):
-            find_pgbin_dir("9.4", max_pgversion="9.5", usr_dir=usr_dir)
-        assert find_pgbin_dir("9.4", max_pgversion="9.6", usr_dir=usr_dir) == pgbin_96
-        assert find_pgbin_dir("9.4", max_pgversion="10", usr_dir=usr_dir) == pgbin_96
-        assert find_pgbin_dir("9.6", usr_dir=usr_dir) == pgbin_96
-        assert find_pgbin_dir("9.6", max_pgversion="10", usr_dir=usr_dir) == pgbin_96
-        assert find_pgbin_dir("9.6.22", usr_dir=usr_dir) == pgbin_96
-        assert find_pgbin_dir("9.6.22", max_pgversion="10", usr_dir=usr_dir) == pgbin_96
-        with pytest.raises(ValueError):
-            find_pgbin_dir("9.7", usr_dir=usr_dir)
-        with pytest.raises(ValueError):
-            find_pgbin_dir("9.7", max_pgversion="10", usr_dir=usr_dir)
 
 
 def test_find_pgbin_dir_prefers_oldest():
