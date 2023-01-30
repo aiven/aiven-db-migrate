@@ -268,6 +268,23 @@ class Test_PGMigrate(PGMigrateTest):
             result=result.pg_databases[dbname2], dbname=dbname2, method="dump", message="created and migrated database"
         )
 
+    def test_migrate_filtered_db_sql_injection(self):
+        dbname1 = random_string()
+        dbname2 = random_string()
+
+        self.source.create_db(dbname=dbname1)
+        self.source.create_db(dbname=dbname2)
+
+        pg_mig = PGMigrate(
+            source_conn_info=self.source.conn_info(),
+            target_conn_info=self.target.conn_info(),
+            createdb=True,
+            verbose=True,
+            filtered_db=f"{dbname1},') OR ('a' = 'a",
+        )
+        result: PGMigrateResult = pg_mig.migrate()
+        assert len(result.pg_databases) == 2
+
 
 @pytest.mark.usefixtures("pg_source_and_target_replication")
 class Test_PGMigrate_Replication(PGMigrateTest):
