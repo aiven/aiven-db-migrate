@@ -402,7 +402,7 @@ def inject_pg_fixture(*, name: str, pgversion: str, scope="module"):
     globals()[name] = generate_pg_fixture(name=name, pgversion=pgversion, scope=scope)
 
 
-SUPPORTED_PG_VERSIONS = ["9.5", "9.6", "10", "11", "12", "13", "14"]
+SUPPORTED_PG_VERSIONS = ["10", "11", "12", "13", "14"]
 pg_cluster_for_tests: List[str] = list()
 pg_source_and_target_for_tests: List[Tuple[str, str]] = list()
 pg_source_and_target_for_replication_tests: List[Tuple[str, str]] = list()
@@ -424,9 +424,7 @@ def generate_fixtures():
         assert version in SUPPORTED_PG_VERSIONS, f"Supported pg versions are: {SUPPORTED_PG_VERSIONS}"
         pg_target_versions.append(version)
     else:
-        # We do not support PG 9.5 as target
         pg_target_versions = copy(SUPPORTED_PG_VERSIONS)
-        pg_target_versions.remove("9.5")
 
     for source in pg_source_versions:
         name_prefix = "pg{}".format(source.replace(".", ""))
