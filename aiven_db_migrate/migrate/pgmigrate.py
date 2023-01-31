@@ -266,9 +266,12 @@ class PGCluster:
         filtered = ["template0", "template1"]
         if self.filtered_db:
             filtered.extend(self.filtered_db)
-        db_list = ",".join(f"'{db}'" for db in filtered)
+        db_params = ",".join(["%s"] * len(filtered))
         with self.db_lock:
-            dbs = self.c(f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_list})")
+            dbs = self.c(
+                f"SELECT datname FROM pg_catalog.pg_database WHERE datname NOT IN ({db_params})",
+                args=filtered,
+            )
             for db in dbs:
                 if db["datname"] not in self._databases:
                     self._set_db(dbname=db["datname"])
