@@ -18,13 +18,10 @@ def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_d
     `pgversion` and `max_pgversion` included.
 
     Versions equal or above 10 only check the major version number: 10, 11, 12, 13...
-
-    Version 9 also checks the minor version number: 9.3, 9.4, 9.5, 9.6.
     """
     min_version = LooseVersion(pgversion).version
     max_version = min_version if max_pgversion is None else LooseVersion(max_pgversion).version
-    # We need a special case for versions 9:  The sub-version counts as a major version too
-    max_parts = 2 if min_version[0] == 9 else 1
+    max_parts = 1
     candidates = []
     search_scopes = [(usr_dir, r"pgsql-([0-9]+(\.[0-9]+)*)"), (usr_dir / "lib/postgresql", r"([0-9]+(\.[0-9]+)*)")]
     for base_dir, pattern in search_scopes:
