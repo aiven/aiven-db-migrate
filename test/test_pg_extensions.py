@@ -1,7 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
-from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGExtension, PGMigrate
+from aiven_db_migrate.errors import PGMigrateValidationFailedError
+from aiven_db_migrate.pgmigrate import PGDatabase, PGExtension, PGMigrate
 from distutils.version import LooseVersion
 from test.conftest import PGRunner
 from test.utils import random_string
