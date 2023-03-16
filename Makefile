@@ -3,7 +3,7 @@ PYTHON ?= python3
 PYTHON_SOURCE_DIRS = aiven_db_migrate/ test/
 PG_VERSIONS = 10 11 12 13 14
 
-generated = aiven_db_migrate/migrate/version.py
+generated = aiven_db_migrate/aiven_db_migrate/version.py
 
 
 all: $(generated)
@@ -54,7 +54,7 @@ test: $(generated)
 	$(PYTHON) -m pytest -v -r test
 
 clean:
-	$(RM) aiven_db_migrate/migrate/version.py
+	$(RM) aiven_db_migrate/aiven_db_migrate/version.py
 
 rpm:
 	sudo $(PYTHON) setup.py bdist_rpm && rm -rf build/
