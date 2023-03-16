@@ -1,4 +1,4 @@
-from aiven_db_migrate.migrate.pgmigrate import PGMigrate
+from aiven_db_migrate.pgmigrate import PGMigrate
 from test.conftest import PGRunner
 from test.utils import random_string, Timer
 from typing import Dict, Set, Tuple

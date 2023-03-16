@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiven_db_migrate.migrate.pgutils import find_pgbin_dir
+from aiven_db_migrate.pgutils import find_pgbin_dir
 from contextlib import contextmanager
 from copy import copy
 from datetime import datetime

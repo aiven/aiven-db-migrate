@@ -1,11 +1,11 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate.errors import (
+from aiven_db_migrate.errors import (
     PGDataDumpFailedError, PGDataNotFoundError, PGMigrateValidationFailedError, PGSchemaDumpFailedError, PGTooMuchDataError
 )
-from aiven_db_migrate.migrate.pgutils import (
+from aiven_db_migrate.pgutils import (
     create_connection_string, find_pgbin_dir, get_connection_info, validate_pg_identifier_length, wait_select
 )
-from aiven_db_migrate.migrate.version import __version__
+from aiven_db_migrate.version import __version__
 from concurrent import futures
 from contextlib import contextmanager, suppress
 from copy import deepcopy

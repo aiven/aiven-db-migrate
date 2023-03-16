@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGMigrate
+from aiven_db_migrate.pgmigrate import PGDatabase, PGMigrate
 from test.conftest import PGRunner
 from test.utils import random_string
 from typing import Tuple
