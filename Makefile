@@ -8,7 +8,7 @@ generated = aiven_db_migrate/aiven_db_migrate/version.py
 
 all: $(generated)
 
-aiven_db_migrate/migrate/version.py:
+aiven_db_migrate/aiven_db_migrate/version.py:
 	echo "__version__ = \"$(shell git describe)\"" > $@
 
 build-dep-fedora:
