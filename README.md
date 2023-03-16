@@ -135,7 +135,7 @@ Migrating from AWS RDS to Aiven for PostgreSQL. Logical replication is enabled i
 server but `aiven-extras` extension is not installed in target database so migrating falls back to data dump.
 
 ```
->>> from aiven.migrate import PGMigrate, PGMigrateResult
+>>> from aiven_db_migrate import PGMigrate, PGMigrateResult
 >>> pg_mig = PGMigrate(source_conn_info="postgres://postgres:<password>@jappja-pg1.chfhzaircbpb.eu-west-1.rds.amazonaws.com:5432/defaultdb", target_conn_info="postgres://avnadmin:<password>@pg2-test-jappja-test.avns.net:26192/defaultdb?sslmode=require")
 >>> result: PGMigrateResult = pg_mig.migrate()
 ...
