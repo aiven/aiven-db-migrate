@@ -33,7 +33,7 @@ mypy: $(generated)
 	$(PYTHON) -m mypy $(PYTHON_SOURCE_DIRS)
 
 isort: $(generated)
-	$(PYTHON) -m isort --recursive $(PYTHON_SOURCE_DIRS)
+	$(PYTHON) -m isort $(PYTHON_SOURCE_DIRS)
 
 yapf: $(generated)
 	$(PYTHON) -m yapf --parallel --recursive --in-place $(PYTHON_SOURCE_DIRS)
