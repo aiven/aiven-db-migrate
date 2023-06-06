@@ -8,10 +8,10 @@ generated = aiven_db_migrate/migrate/version.py
 
 all: $(generated)
 
-aiven_db_migrate/migrate/version.py:
+aiven_db_migrate/migrate/version.py: validate-python-version
 	echo "__version__ = \"$(shell git describe)\"" > $@
 
-build-dep-fedora:
+build-dep-fedora: validate-python-version
 	sudo dnf -y install --best --allowerasing \
 		$(foreach ver,$(PG_VERSIONS),postgresql$(ver)-server) \
 		python3-flake8 \
@@ -48,6 +48,9 @@ validate-style:
 	git diff > $(CHANGES_AFTER)
 	diff $(CHANGES_BEFORE) $(CHANGES_AFTER)
 	-rm $(CHANGES_BEFORE) $(CHANGES_AFTER)
+
+validate-python-version:
+	$(PYTHON) -c 'import sys; v=sys.version_info; assert v >= (3, 9), f"Python 3.9 or newer is required. Current version: {v[0]}.{v[1]}.{v[2]}."'
 
 .PHONY: test
 test: $(generated)
