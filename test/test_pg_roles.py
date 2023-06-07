@@ -1,11 +1,12 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-
-from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult
+from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
+from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult, PGTarget
 from datetime import datetime
 from test.conftest import PGRunner
-from test.utils import random_string
+from test.utils import modify_pg_security_agent_reserved_roles, random_string
 from typing import Tuple
 
+import pytest
 import time
 
 
@@ -89,8 +90,13 @@ def test_pg_roles_rolconfig(pg_source_and_target: Tuple[PGRunner, PGRunner]):
             assert role["rolpassword"].startswith("placeholder_")
 
 
-def test_pg_roles_superusers(pg_source_and_target: Tuple[PGRunner, PGRunner]):
-    source, target = pg_source_and_target
+def test_pg_roles_superusers(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunner]):
+    """Test that superusers are not created on target **without** a superuser connection.
+
+    Note:
+        This tests the behaviour of an unsafe target, which would not have ``shared_preload_libraries = aiven_gatekeeper``.
+    """
+    source, target = pg_source_and_target_unsafe
     username = random_string()
     source.add_cleanup(lambda: source.drop_user(username=username))
     source.create_role(username=username, password=random_string(), superuser=True)
@@ -139,8 +145,13 @@ def test_pg_roles_replication_users(pg_source_and_target: Tuple[PGRunner, PGRunn
     assert username not in roles
 
 
-def test_pg_roles_as_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner]):
-    source, target = pg_source_and_target
+def test_pg_roles_as_superuser(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunner]):
+    """Test that superusers are successfully created on target **with** a superuser connection.
+
+    Note:
+        This tests the behaviour of an unsafe target, which would not have ``shared_preload_libraries = aiven_gatekeeper``.
+    """
+    source, target = pg_source_and_target_unsafe
     superuser = random_string()
     repuser = random_string()
     source.add_cleanup(lambda: source.drop_user(username=superuser))
@@ -218,3 +229,73 @@ def test_pg_roles_connection_limit(pg_source_and_target: Tuple[PGRunner, PGRunne
 
     role = next(r for r in target.list_roles() if r["rolname"] == username)
     assert role["rolconnlimit"] == connlimit
+
+
+def test_migration_fails_with_additional_superuser_roles(pg_source_and_target: Tuple[PGRunner, PGRunner]):
+    """Test that it fails when we try to migrate superuser roles that are not in the reserved roles list of the target."""
+    source, target = pg_source_and_target
+    superuser1 = random_string()
+    superuser2 = random_string()
+    source.add_cleanup(lambda: source.drop_user(username=superuser1))
+    source.add_cleanup(lambda: source.drop_user(username=superuser2))
+    source.create_role(username=superuser1, password=random_string(), superuser=True)
+    source.create_role(username=superuser2, password=random_string(), superuser=True)
+    pg_mig = PGMigrate(
+        source_conn_info=source.conn_info(), target_conn_info=target.super_conn_info(), createdb=True, verbose=True
+    )
+
+    assert pg_mig.target.is_pg_security_agent_enabled
+
+    with pytest.raises(
+        PGMigrateValidationFailedError,
+        match=r"Some superuser roles from source database are not allowed in target database.*",
+    ):
+        pg_mig.migrate()
+
+
+def test_migration_succeeds_with_authorized_superuser_role(pg_source_and_target: Tuple[PGRunner, PGRunner]) -> None:
+    """Test that it succeeds when we try to migrate a superuser role that is in the reserved roles list of the target."""
+    source, target = pg_source_and_target
+
+    with modify_pg_security_agent_reserved_roles(target) as superuser:
+        source.add_cleanup(lambda: source.drop_user(username=superuser))
+        source.create_role(username=superuser, password=random_string(), superuser=True)
+
+        pg_mig = PGMigrate(
+            source_conn_info=source.conn_info(), target_conn_info=target.super_conn_info(), createdb=True, verbose=True
+        )
+
+        reserved_roles = pg_mig.target.get_security_agent_reserved_roles()
+
+        assert pg_mig.target.is_pg_security_agent_enabled
+        assert superuser in pg_mig.target.get_security_agent_reserved_roles(), str(reserved_roles)
+
+        result: PGMigrateResult = pg_mig.migrate()
+
+        assert superuser in result.pg_roles
+        assert result.pg_roles[superuser]["status"] == "created"
+        assert result.pg_roles[superuser]["message"] == "role created"
+
+        # Get the specificities of this role
+        perms = pg_mig.target.c(f"SELECT * FROM pg_roles WHERE rolname = %s", args=(superuser, ), return_rows=1)[0]
+        assert perms["rolsuper"] is True
+
+
+def test_user_cannot_see_reserved_roles(pg_source_and_target: Tuple[PGRunner, PGRunner]) -> None:
+    """Test that a user cannot see the reserved roles."""
+    source, target = pg_source_and_target
+
+    authorized_roles = PGTarget(conn_info=target.conn_info()).get_security_agent_reserved_roles()
+
+    assert not authorized_roles
+
+
+def test_superuser_can_see_reserved_roles(
+    pg_source_and_target: Tuple[PGRunner, PGRunner], pg_system_roles: list[str]
+) -> None:
+    """Test that a superuser can see the reserved roles."""
+    source, target = pg_source_and_target
+
+    authorized_roles = PGTarget(conn_info=target.super_conn_info()).get_security_agent_reserved_roles()
+
+    assert set(authorized_roles) == set(pg_system_roles)

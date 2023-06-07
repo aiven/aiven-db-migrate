@@ -1,5 +1,10 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
+from aiven_db_migrate.migrate.pgmigrate import PGTarget
+from contextlib import contextmanager
+from test.conftest import PGRunner
+from typing import Iterator
+
 import datetime
 import random
 import string
@@ -145,3 +150,25 @@ class Timer(TimerBase):
         if not isinstance(self._sleep, tuple):
             return self._sleep
         return random.randrange(*self._sleep)
+
+
+@contextmanager
+def modify_pg_security_agent_reserved_roles(target: PGRunner) -> Iterator[str]:
+    """Modify the list of reserved roles of the target database.
+
+    Returns:
+        The name of the superuser role that was added to the list of reserved roles.
+    """
+    authorized_roles = PGTarget(conn_info=target.super_conn_info()).get_security_agent_reserved_roles()
+    superuser = random_string()
+    authorized_roles_str = ",".join(authorized_roles)
+    modified_authorized_roles_str = ",".join(authorized_roles + [superuser])
+
+    target.make_conf(**{"aiven.pg_security_agent_reserved_roles": f"'{modified_authorized_roles_str}'"}).stop()
+    target.start()
+
+    try:
+        yield superuser
+    finally:
+        target.make_conf(**{"aiven.pg_security_agent_reserved_roles": f"'{authorized_roles_str}'"}).stop()
+        target.start()
