@@ -11,8 +11,8 @@ import pytest
 
 
 @pytest.mark.parametrize("aiven_extras", [True, False])
-def test_replication(pg_source_and_target_replication: Tuple[PGRunner, PGRunner], aiven_extras: bool):
-    source, target = pg_source_and_target_replication
+def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extras: bool):
+    source, target = pg_source_and_target
     dbname = random_string()
     tblname = random_string()
 
@@ -91,8 +91,8 @@ def test_replication(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]
     assert not target.list_subs()
 
 
-def test_replication_no_aiven_extras_no_superuser(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]):
-    source, target = pg_source_and_target_replication
+def test_replication_no_aiven_extras_no_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner]):
+    source, target = pg_source_and_target
     dbname = random_string()
     source.create_db(dbname=dbname)
     target.create_db(dbname=dbname)

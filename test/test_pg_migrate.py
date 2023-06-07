@@ -286,7 +286,7 @@ class Test_PGMigrate(PGMigrateTest):
         assert len(result.pg_databases) == 2
 
 
-@pytest.mark.usefixtures("pg_source_and_target_replication")
+@pytest.mark.usefixtures("pg_source_and_target")
 class Test_PGMigrate_Replication(PGMigrateTest):
 
     # pylint: disable=no-member
