@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from distutils.version import LooseVersion
 from pathlib import Path
+from psycopg2._psycopg import connection
 from psycopg2.extras import RealDictCursor
 from typing import Any, Callable, Dict, Iterator, List, Tuple
 
@@ -387,11 +388,24 @@ class PGRunner:
 
     @contextmanager
     def cursor(self, *, username: str = None, dbname: str = None, autocommit: bool = True) -> RealDictCursor:
-        conn = None
-        try:
-            conn = psycopg2.connect(**self.conn_info(username=username, dbname=dbname))
+        with self.connection(username=username, dbname=dbname) as conn:
             conn.autocommit = autocommit
             yield conn.cursor(cursor_factory=RealDictCursor)
+
+    @contextmanager
+    def connection(
+        self,
+        *,
+        username: str | None = None,
+        dbname: str | None = None,
+        connection_factory: type[connection] | None = None
+    ) -> psycopg2.extensions.connection:
+        conn = None
+        try:
+            conn = psycopg2.connect(
+                **self.conn_info(username=username, dbname=dbname), connection_factory=connection_factory
+            )
+            yield conn
         finally:
             if conn is not None:
                 conn.close()
@@ -408,14 +422,18 @@ class PGRunner:
         )
         subprocess.run(cmd, check=True)
 
-    def drop_dbs(self):
+    def get_all_db_names(self) -> list[str]:
         with self.cursor(username=self.superuser) as cur:
             cur.execute(
                 "SELECT datname from pg_catalog.pg_database WHERE NOT datistemplate AND datname <> %s", (self.defaultdb, )
             )
             dbs = cur.fetchall()
-        for db in dbs:
-            self.drop_db(dbname=db["datname"])
+
+        return [db["datname"] for db in dbs]
+
+    def drop_dbs(self):
+        for db_name in self.get_all_db_names():
+            self.drop_db(dbname=db_name)
 
     def drop_user(self, *, username):
         self.log.info("Dropping user %r from %r", username, self.pgdata)

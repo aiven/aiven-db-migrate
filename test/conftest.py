@@ -4,16 +4,23 @@ from __future__ import annotations
 
 from _pytest.fixtures import FixtureRequest
 from _pytest.tmpdir import TempPathFactory
+from aiven_db_migrate.migrate.pgmigrate import PGTarget
 from contextlib import contextmanager
 from copy import copy
 from distutils.version import LooseVersion
+from functools import partial, wraps
 from pathlib import Path
+from psycopg2.extras import LogicalReplicationConnection, ReplicationCursor
 from test.utils import PGRunner, SUPPORTED_PG_VERSIONS
-from typing import Iterator, List, Tuple
+from typing import Callable, cast, Iterator, List, Tuple, TypeVar
+from unittest.mock import patch
 
 import logging
 import os
+import psycopg2
 import pytest
+
+R = TypeVar("R")
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s")
 
@@ -126,6 +133,39 @@ def fixture_pg_cluster(request):
     cluster_runner.drop_dbs()
 
 
+def clean_replication_slots_for_runner(pg_runner: PGRunner) -> Callable[[Callable[..., R]], Callable[..., R]]:
+    """Parametrized decorator to clean replication slots for a given PGRunner instance."""
+    def clean_replication_slots(function: Callable[..., R]) -> Callable[..., R]:
+        """Decorator that schedules a drop of all replication slots created by the decorated function."""
+        def _drop_replication_slot(pg_runner_: PGRunner, slot_name: str) -> None:
+            """Drop a replication slot, will try to find it in all databases."""
+            for db in pg_runner_.get_all_db_names():
+                try:
+                    with pg_runner_.connection(
+                        username=pg_runner_.superuser, dbname=db, connection_factory=LogicalReplicationConnection
+                    ) as log_conn:
+                        log_cursor: ReplicationCursor
+                        with log_conn.cursor() as log_cursor:
+                            log_cursor.drop_replication_slot(slot_name)
+                            logging.info("Dropped replication slot %s on %s", slot_name, db)
+                except psycopg2.errors.UndefinedObject:
+                    pass
+                else:
+                    break  # Found it, no need to try other databases.
+
+        @wraps(function)
+        def wrapper(self: PGTarget, *args, slotname: str, **kwargs) -> R:
+            subname = function(self, *args, slotname=slotname, **kwargs)
+
+            pg_runner.cleanups.append(partial(_drop_replication_slot, pg_runner_=pg_runner, slot_name=slotname))
+
+            return subname
+
+        return wrapper
+
+    return clean_replication_slots
+
+
 @contextmanager
 def make_pg_source_and_target(request: FixtureRequest) -> Iterator[Tuple[PGRunner, PGRunner]]:
     """Returns a fixture parametrized on the union of all source and target pg versions.
@@ -136,25 +176,32 @@ def make_pg_source_and_target(request: FixtureRequest) -> Iterator[Tuple[PGRunne
     If the fixture is used in a class, the attributes ``source`` and ``target`` are also set
     on the class.
     """
-    source, target = request.param
+    source_fixture_name, target_fixture_name = request.param
     # run the fixture function
-    source = request.getfixturevalue(source)
-    target = request.getfixturevalue(target)
-    if request.cls:
-        request.cls.source = source
-        request.cls.target = target
+    source: PGRunner = request.getfixturevalue(source_fixture_name)
+    target: PGRunner = request.getfixturevalue(target_fixture_name)
 
-    try:
-        yield source, target
-    finally:
-        # cleanup functions
-        for cleanup in source.cleanups + target.cleanups:
-            cleanup()
-        source.cleanups.clear()
-        target.cleanups.clear()
-        # cleanup created db's
-        source.drop_dbs()
-        target.drop_dbs()
+    # Patch PGTarget.create_subscription to add the cleanup of created logical slots to the cleanup list.
+    # We do this because in some rare cases, the teardown already drops the table while the replication
+    # slot is still active, which causes the drop to fail. In the cleanup, it is executed after all
+    # connections are closed, so it should always succeed.
+    patched_create_subscription = clean_replication_slots_for_runner(target)(PGTarget.create_subscription)
+    with patch("aiven_db_migrate.migrate.pgmigrate.PGTarget.create_subscription", patched_create_subscription):
+        if request.cls:
+            request.cls.source = source
+            request.cls.target = target
+
+        try:
+            yield source, target
+        finally:
+            # cleanup functions
+            for cleanup in source.cleanups + target.cleanups:
+                cleanup()
+            source.cleanups.clear()
+            target.cleanups.clear()
+            # cleanup created db's
+            source.drop_dbs()
+            target.drop_dbs()
 
 
 @pytest.fixture(
