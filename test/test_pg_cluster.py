@@ -2,7 +2,7 @@
 from aiven_db_migrate.migrate.pgmigrate import PGCluster
 from distutils.version import LooseVersion
 from multiprocessing import Process
-from test.conftest import PGRunner
+from test.utils import PGRunner
 
 import os
 import pytest

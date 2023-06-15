@@ -2,8 +2,7 @@
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
-from test.conftest import PGRunner
-from test.utils import random_string
+from test.utils import PGRunner, random_string
 from typing import Tuple
 from unittest.mock import MagicMock, patch
 

@@ -2,8 +2,7 @@
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult
-from test.conftest import PGRunner
-from test.utils import random_string, Timer
+from test.utils import PGRunner, random_string, Timer
 from typing import Any, Dict, Optional
 
 import os
