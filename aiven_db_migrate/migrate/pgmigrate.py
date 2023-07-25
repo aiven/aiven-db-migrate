@@ -107,6 +107,7 @@ class PGCluster:
     _pg_lang: Optional[List[Dict[str, Any]]]
     _pg_roles: Dict[str, PGRole]
     _mangle: bool
+    _has_aiven_gatekeper: Optional[bool]
 
     def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None, mangle: bool = False):
         self.log = logging.getLogger(self.__class__.__name__)
@@ -128,6 +129,7 @@ class PGCluster:
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
+        self._has_aiven_gatekeper = None
 
     def conn_str(self, *, dbname: str = None) -> str:
         conn_info: Dict[str, Any] = deepcopy(self.conn_info)
@@ -220,12 +222,7 @@ class PGCluster:
         try:
             exts = self.c("SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname)
             pg_ext = [PGExtension(name=e["name"], version=e["version"]) for e in exts]
-            try:
-                next(e for e in pg_ext if e.name == "aiven_extras")
-            except StopIteration:
-                has_aiven_extras = False
-            else:
-                has_aiven_extras = True
+            has_aiven_extras = any(e.name == "aiven_extras" for e in pg_ext)
             extension_tables = {}
             extension_tables_res = self.c(
                 "SELECT extname, extconfig FROM pg_catalog.pg_extension WHERE extconfig IS NOT NULL", dbname=dbname
@@ -365,6 +362,46 @@ class PGCluster:
     @property
     def is_superuser(self) -> bool:
         return self.attributes["rolsuper"]
+
+    @property
+    def has_aiven_gatekeeper(self) -> bool:
+        """Check if ``aiven-gatekeeper`` shared library is installed.
+
+        This value is cached as it's not expected to change during runtime.
+
+        See:
+            https://github.com/aiven/aiven-pg-security
+        """
+        if self._has_aiven_gatekeper is None:
+            result = self.c("SELECT setting FROM pg_settings WHERE name = 'shared_preload_libraries'")
+            if not result:
+                self._has_aiven_gatekeper = False
+            else:
+                self._has_aiven_gatekeper = "aiven_gatekeeper" in str(result[0]["setting"]).split(",")
+
+        return self._has_aiven_gatekeper
+
+    @property
+    def is_pg_security_agent_enabled(self) -> bool:
+        """Check if Aiven's ``pg_security_agent`` is enabled."""
+        if not self.has_aiven_gatekeeper:
+            return False
+
+        result = self.c("SELECT name, setting FROM pg_settings WHERE name = 'aiven.pg_security_agent'")
+
+        return result and result[0]["setting"] == "on"
+
+    def get_security_agent_reserved_roles(self) -> List[str]:
+        """Get list of roles that are reserved through Aiven's ``pg_security_agent``."""
+        if not self.is_pg_security_agent_enabled:
+            return []
+
+        result = self.c("SELECT name, setting FROM pg_settings WHERE name = 'aiven.pg_security_agent_reserved_roles'")
+
+        if not result:
+            return []
+
+        return result[0]["setting"].split(",")
 
     def has_aiven_extras(self, *, dbname: str) -> bool:
         """Check if aiven_extras extension is installed in database"""
@@ -859,6 +896,18 @@ class PGMigrate:
             quoted.append(name)
         return quoted
 
+    def _check_different_servers(self) -> None:
+        """Check if source and target are different servers."""
+        source = (self.source.conn_info["host"], self.source.conn_info.get("port"))
+        target = (self.target.conn_info["host"], self.target.conn_info.get("port"))
+        if source == target:
+            raise PGMigrateValidationFailedError("Migrating to the same server is not supported")
+
+    def _check_db_versions(self) -> None:
+        """Check that the version of the target database is the same or more recent than the source database."""
+        if self.source.version > self.target.version:
+            raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
+
     def _check_databases(self):
         for db in self.source.databases.values():
             dbname = db.dbname
@@ -963,7 +1012,50 @@ class PGMigrate:
                     dbname
                 )
 
-    def _check_pg_lobs(self):
+    def _check_aiven_pg_security_agent(self) -> None:
+        """Check that the source complies with the Aiven PostgreSQL security agent requirements, if used.
+
+        If the target database uses Aiven PostgreSQL security agent, check that the source database
+        doesn't have any superuser roles that are not allowed in the target database.
+
+        Note:
+            When the target does not use Aiven PostgreSQL security agent, which is allowed, no check needs
+            to be done, and no error is raised.
+
+        Raises:
+            PGMigrateValidationFailedError: If the source database has superuser roles that are forbidden
+                by the Aiven PostgreSQL security agent, in the target database.
+        """
+        if not self.target.has_aiven_gatekeeper:
+            return
+
+        self.log.info("Aiven PostgreSQL security agent is used by the target.")
+
+        # Get the list of roles that are in the source but not in the target.
+        missing_roles = set(self.source.pg_roles.keys()) - set(self.target.pg_roles.keys())
+        # Only the superuser roles.
+        su_missing_roles = {r for r in missing_roles if self.source.pg_roles[r].rolsuper}
+        # The only allowed superuser roles in the target.
+        reserved_roles = set(self.target.get_security_agent_reserved_roles())
+
+        unauthorized_roles = su_missing_roles - reserved_roles
+
+        if unauthorized_roles:
+            self.log.error("Some superuser roles from source database are not allowed in target database.")
+
+            exc_message_with_hints = (
+                "Some superuser roles from source database are not allowed in target database. "
+                "Hints: To see all superusers in the source DB, run 'SELECT rolname FROM pg_roles WHERE rolsuper;'. "
+                "To see which roles are allowed in the target DB, search in 'postgresql.conf' file for "
+                "'aiven.pg_security_agent_reserved_roles'."
+            )
+
+            raise PGMigrateValidationFailedError(exc_message_with_hints)
+
+        self.log.info("All superuser roles from source database are allowed in target database.")
+
+    def _warn_if_pg_lobs(self):
+        """Warn if large objects are present in source databases."""
         for source_db in self.source.databases.values():
             if source_db.error:
                 # access failed/rejected, skip lobs check
@@ -1187,19 +1279,15 @@ class PGMigrate:
         * Check that all languages installed in source are also available in target
         * Check that all extensions installed in source databases are either installed or available for installation
           in target
-        * Check that large objects are not present in the source database. If present, log a warning.
+        * Check that all superusers in source are authorized in target. It can be denied by aiven-gatekeeper.
+        * Check that large objects are not present in the source database. If present, issue a warning.
         """
         try:
             if self.stop_replication and self.max_replication_lag < 0:
                 raise PGMigrateValidationFailedError("Stopping replication requires also '--max-replication-lag' >= 0")
-            if (
-                self.source.conn_info["host"] == self.target.conn_info["host"]
-                and self.source.conn_info["port"] == self.target.conn_info["port"]
-            ):
-                raise PGMigrateValidationFailedError("Migrating to the same server is not supported")
-            if self.source.version > self.target.version:
-                raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
-            # pgdump cannot be older than the source version, cannot be newer than the target version
+            self._check_different_servers()
+            self._check_db_versions()
+            # pgdump cannot be older than the source version, cannot be newer than the target version,
             # but it can be newer than the source version: source <= pgdump <= target
 
             if self.pgbin is None:
@@ -1210,7 +1298,8 @@ class PGMigrate:
                 self._check_database_size(max_size=dbs_max_total_size)
             self._check_pg_lang()
             self._check_pg_ext()
-            self._check_pg_lobs()
+            self._check_aiven_pg_security_agent()
+            self._warn_if_pg_lobs()
         except KeyError as err:
             raise PGMigrateValidationFailedError("Invalid source or target connection string") from err
         except ValueError as err:

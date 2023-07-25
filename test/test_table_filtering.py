@@ -1,6 +1,5 @@
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
-from test.conftest import PGRunner
-from test.utils import random_string, Timer
+from test.utils import PGRunner, random_string, Timer
 from typing import Dict, Set, Tuple
 
 import psycopg2
@@ -9,16 +8,12 @@ import pytest
 #  pylint: disable=invalid-string-quote
 
 
-@pytest.mark.parametrize(["skip", "with_extension"], [
-    [False, False],
-    [True, True],
-    [True, False],
-    [False, True],
-])
+@pytest.mark.parametrize("skip", [True, False])
+@pytest.mark.parametrize("with_extension", [True, False])
 def test_extension_table_filtering(
-    pg_source_and_target_replication: Tuple[PGRunner, PGRunner], skip: bool, with_extension: bool
-):
-    source, target = pg_source_and_target_replication
+    pg_source_and_target: Tuple[PGRunner, PGRunner], skip: bool, with_extension: bool
+) -> None:
+    source, target = pg_source_and_target
     db_name = random_string(6)
     other_db_name = random_string(6)
     source.create_db(dbname=db_name)
@@ -84,9 +79,9 @@ def test_extension_table_filtering(
     [False, True, True],
 ])
 def test_table_filtering(
-    pg_source_and_target_replication: Tuple[PGRunner, PGRunner], skip: bool, with_db: bool, with_schema: bool
-):
-    source, target = pg_source_and_target_replication
+    pg_source_and_target: Tuple[PGRunner, PGRunner], skip: bool, with_db: bool, with_schema: bool
+) -> None:
+    source, target = pg_source_and_target
     db_name = random_string(6)
     other_db_name = random_string(6)
     schema_name = "schema" if with_schema else "public"
@@ -143,17 +138,10 @@ def test_table_filtering(
         assert not no_match_filter
 
 
-@pytest.mark.parametrize(
-    ["superuser", "extras"],
-    [
-        [True, True],
-        [False, False],
-        [True, False],
-        [False, True],
-    ],
-)
-def test_replicate_filter_with(pg_source_and_target_replication: Tuple[PGRunner, PGRunner], superuser: bool, extras):
-    source, target = pg_source_and_target_replication
+@pytest.mark.parametrize("superuser", [True, False])
+@pytest.mark.parametrize("extras", [True, False])
+def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], superuser: bool, extras: bool) -> None:
+    source, target = pg_source_and_target
     db_name = random_string(6)
     other_db_name = random_string(6)
     for db in [db_name, other_db_name]:

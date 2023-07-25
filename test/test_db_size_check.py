@@ -1,14 +1,13 @@
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
-from test.conftest import PGRunner
-from test.utils import random_string
+from test.utils import PGRunner, random_string
 from typing import Tuple
 
 import psycopg2
 import pytest
 
 
-def test_db_size(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]):
-    source, target = pg_source_and_target_replication
+def test_db_size(pg_source_and_target: Tuple[PGRunner, PGRunner]):
+    source, target = pg_source_and_target
 
     db_name = random_string(6)
     other_db_name = random_string(6)

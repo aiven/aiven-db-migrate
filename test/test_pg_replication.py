@@ -1,8 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
 from aiven_db_migrate.migrate.pgmigrate import PGSource, PGTarget
-from test.conftest import PGRunner
-from test.utils import random_string, Timer
+from test.utils import PGRunner, random_string, Timer
 from typing import Tuple
 
 import psycopg2
@@ -11,8 +10,8 @@ import pytest
 
 
 @pytest.mark.parametrize("aiven_extras", [True, False])
-def test_replication(pg_source_and_target_replication: Tuple[PGRunner, PGRunner], aiven_extras: bool):
-    source, target = pg_source_and_target_replication
+def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extras: bool):
+    source, target = pg_source_and_target
     dbname = random_string()
     tblname = random_string()
 
@@ -91,8 +90,8 @@ def test_replication(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]
     assert not target.list_subs()
 
 
-def test_replication_no_aiven_extras_no_superuser(pg_source_and_target_replication: Tuple[PGRunner, PGRunner]):
-    source, target = pg_source_and_target_replication
+def test_replication_no_aiven_extras_no_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner]):
+    source, target = pg_source_and_target
     dbname = random_string()
     source.create_db(dbname=dbname)
     target.create_db(dbname=dbname)

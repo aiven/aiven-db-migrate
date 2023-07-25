@@ -2,8 +2,7 @@
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult
-from test.conftest import PGRunner
-from test.utils import random_string, Timer
+from test.utils import PGRunner, random_string, Timer
 from typing import Any, Dict, Optional
 
 import os
@@ -286,7 +285,7 @@ class Test_PGMigrate(PGMigrateTest):
         assert len(result.pg_databases) == 2
 
 
-@pytest.mark.usefixtures("pg_source_and_target_replication")
+@pytest.mark.usefixtures("pg_source_and_target")
 class Test_PGMigrate_Replication(PGMigrateTest):
 
     # pylint: disable=no-member

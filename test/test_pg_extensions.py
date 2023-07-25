@@ -3,8 +3,7 @@
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGExtension, PGMigrate
 from distutils.version import LooseVersion
-from test.conftest import PGRunner
-from test.utils import random_string
+from test.utils import PGRunner, random_string
 from typing import Tuple
 
 import pytest

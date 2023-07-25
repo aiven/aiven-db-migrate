@@ -2,8 +2,7 @@
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
-from test.conftest import PGRunner
-from test.utils import random_string
+from test.utils import PGRunner, random_string
 from typing import Tuple
 from unittest.mock import MagicMock, patch
 
@@ -136,7 +135,7 @@ def test_large_object_warnings(pg_source_and_target: Tuple[PGRunner, PGRunner]):
         cur.execute("SELECT lo_create(0)")
 
     with patch(
-        "aiven_db_migrate.migrate.pgmigrate.PGMigrate._check_pg_lobs", side_effect=pg_mig._check_pg_lobs
+        "aiven_db_migrate.migrate.pgmigrate.PGMigrate._warn_if_pg_lobs", side_effect=pg_mig._warn_if_pg_lobs
     ) as mock_lobs_check:
         pg_mig.validate()
         mock_lobs_check.assert_called_once()
