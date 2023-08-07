@@ -349,6 +349,10 @@ class PGCluster:
         return self.version >= "10"
 
     @property
+    def replication_slots_count(self) -> int:
+        return int(self.c("SELECT COUNT(1) FROM pg_replication_slots")[0]["count"])
+
+    @property
     def user_can_replicate(self) -> bool:
         """
         Check if user has REPLICATION privilege. Note that even if this privilege is missing user might still
