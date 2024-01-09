@@ -109,7 +109,13 @@ class PGCluster:
     _mangle: bool
     _has_aiven_gatekeper: Optional[bool]
 
-    def __init__(self, conn_info: Union[str, Dict[str, Any]], filtered_db: Optional[str] = None, mangle: bool = False):
+    def __init__(
+        self,
+        conn_info: Union[str, Dict[str, Any]],
+        filtered_db: Optional[str] = None,
+        excluded_roles: Optional[str] = None,
+        mangle: bool = False,
+    ):
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
@@ -122,10 +128,8 @@ class PGCluster:
         self._pg_ext_whitelist = None
         self._pg_lang = None
         self._pg_roles = dict()
-        if filtered_db:
-            self.filtered_db = filtered_db.split(",")
-        else:
-            self.filtered_db = []
+        self.filtered_db = filtered_db.split(",") if filtered_db else []
+        self.excluded_roles = excluded_roles.split(",") if excluded_roles else []
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
@@ -320,6 +324,9 @@ class PGCluster:
         if not self._pg_roles:
             # exclude system roles
             roles = self.c("SELECT quote_ident(rolname) as safe_rolname, * FROM pg_catalog.pg_roles WHERE oid > 16384")
+            # Filter out excluded roles.
+            roles = [r for r in roles if r["rolname"] not in self.excluded_roles]
+
             for r in roles:
                 rolname = r["rolname"]
                 # create semi-random placeholder password for role with login
@@ -789,6 +796,7 @@ class PGMigrate:
         verbose: bool = False,
         mangle: bool = False,
         filtered_db: Optional[str] = None,
+        excluded_roles: Optional[str] = None,
         skip_tables: Optional[List[str]] = None,
         with_tables: Optional[List[str]] = None,
         replicate_extensions: bool = True,
@@ -796,8 +804,18 @@ class PGMigrate:
         if skip_tables and with_tables:
             raise Exception("Can only specify a skip table list or a with table list")
         self.log = logging.getLogger(self.__class__.__name__)
-        self.source = PGSource(conn_info=source_conn_info, filtered_db=filtered_db, mangle=mangle)
-        self.target = PGTarget(conn_info=target_conn_info, filtered_db=filtered_db, mangle=mangle)
+        self.source = PGSource(
+            conn_info=source_conn_info,
+            filtered_db=filtered_db,
+            excluded_roles=excluded_roles,
+            mangle=mangle,
+        )
+        self.target = PGTarget(
+            conn_info=target_conn_info,
+            filtered_db=filtered_db,
+            excluded_roles=excluded_roles,
+            mangle=mangle,
+        )
         self.skip_tables = self._convert_table_names(skip_tables)
         self.with_tables = self._convert_table_names(with_tables)
         if pgbin is None:
@@ -1047,14 +1065,13 @@ class PGMigrate:
         if unauthorized_roles:
             self.log.error("Some superuser roles from source database are not allowed in target database.")
 
-            exc_message_with_hints = (
-                "Some superuser roles from source database are not allowed in target database. "
-                "Hints: To see all superusers in the source DB, run 'SELECT rolname FROM pg_roles WHERE rolsuper;'. "
-                "To see which roles are allowed in the target DB, search in 'postgresql.conf' file for "
-                "'aiven.pg_security_agent_reserved_roles'."
+            exc_message = (
+                f"Some superuser roles from source database {tuple(unauthorized_roles)} are not "
+                "allowed in target database. You can delete them from the source or exclude them from "
+                "the migration if you are sure your database will function properly without them."
             )
 
-            raise PGMigrateValidationFailedError(exc_message_with_hints)
+            raise PGMigrateValidationFailedError(exc_message)
 
         self.log.info("All superuser roles from source database are allowed in target database.")
 
@@ -1387,6 +1404,12 @@ def main(args=None, *, prog="pg_migrate"):
     parser.add_argument(
         "-f", "--filtered-db", help="Comma separated list of databases to filter out during migrations", required=False
     )
+    parser.add_argument(
+        "-xr",
+        "--excluded-roles",
+        help="Comma separated list of database roles to exclude during migrations",
+        required=False,
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
     parser.add_argument(
         "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
@@ -1479,6 +1502,7 @@ def main(args=None, *, prog="pg_migrate"):
         stop_replication=args.stop_replication,
         verbose=args.verbose,
         filtered_db=args.filtered_db,
+        excluded_roles=args.excluded_roles,
         mangle=args.mangle,
         skip_tables=args.skip_table,
         with_tables=args.with_table,

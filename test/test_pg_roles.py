@@ -247,9 +247,37 @@ def test_migration_fails_with_additional_superuser_roles(pg_source_and_target: T
 
     with pytest.raises(
         PGMigrateValidationFailedError,
-        match=r"Some superuser roles from source database are not allowed in target database.*",
+        match=r"Some superuser roles from source database .* are not allowed in target database.*",
     ):
         pg_mig.migrate()
+
+
+def test_migration_succeeds_when_additional_superuser_roles_are_excluded(
+    pg_source_and_target: Tuple[PGRunner, PGRunner],
+) -> None:
+    """Test that migration succeeds when non allowed superuser roles are excluded."""
+    source, target = pg_source_and_target
+    regularuser = random_string()
+    superuser1 = random_string()
+    superuser2 = random_string()
+    source.add_cleanup(lambda: source.drop_user(username=regularuser))
+    source.add_cleanup(lambda: source.drop_user(username=superuser1))
+    source.add_cleanup(lambda: source.drop_user(username=superuser2))
+    source.create_role(username=regularuser, password=random_string())
+    source.create_role(username=superuser1, password=random_string(), superuser=True)
+    source.create_role(username=superuser2, password=random_string(), superuser=True)
+
+    pg_mig = PGMigrate(
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.super_conn_info(),
+        createdb=True,
+        verbose=True,
+        excluded_roles=f"{superuser1},{superuser2}",
+    )
+    assert pg_mig.target.is_pg_security_agent_enabled
+    result = pg_mig.migrate()
+
+    assert result.pg_roles.keys() == {regularuser, source.testuser}
 
 
 def test_migration_succeeds_with_authorized_superuser_role(pg_source_and_target: Tuple[PGRunner, PGRunner]) -> None:
