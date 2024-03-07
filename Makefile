@@ -9,7 +9,7 @@ generated = aiven_db_migrate/migrate/version.py
 all: $(generated)
 
 aiven_db_migrate/migrate/version.py:
-	echo "__version__ = \"$(shell git describe)\"" > $@
+	echo "__version__ = \"$(shell git describe | awk -F- '{ printf "%s",$$1 } length($$2) != 0 {printf ".dev%s",$$2} length($$3) != 0 { printf "+%s",$$3 }')\"" > $@
 
 build-dep-fedora:
 	sudo dnf -y install --best --allowerasing \
