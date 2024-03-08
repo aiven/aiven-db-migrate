@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aiven-db-migrate"
+dynamic = ["version"]
+description = "Aiven database migration tool"
+readme = "README.md"
+license = { text = "Apache License 2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "Aiven", email = "support@aiven.io" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = ["psycopg2==2.9.6"]
+[project.optional-dependencies]
+dev = [
+    "flake8==6.0.0",
+    "hatch==1.9.3",
+    "isort==5.12.0",
+    "mypy==1.3.0",
+    "pylint==2.17.4",
+    "pytest==7.3.1",
+    "yapf==0.33.0",
+]
+
+[project.scripts]
+pg_migrate = "aiven_db_migrate.migrate.pgmigrate:main"
+
+[project.urls]
+Homepage = "https://aiven.io/"
+Issues = "https://github.com/aiven/aiven-db-migrate/issues"
+Documentation = "https://aiven.io/docs/products/postgresql/howto/run-aiven-db-migrate-python"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "aiven_db_migrate/migrate/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/aiven_db_migrate"]

@@ -1,7 +1,8 @@
-
 PYTHON ?= python3
 PYTHON_SOURCE_DIRS = aiven_db_migrate/ test/
 PG_VERSIONS = 10 11 12 13 14
+VERSION = $(shell hatch version)
+RELEASE = 1
 
 generated = aiven_db_migrate/migrate/version.py
 
@@ -9,11 +10,14 @@ generated = aiven_db_migrate/migrate/version.py
 all: $(generated)
 
 aiven_db_migrate/migrate/version.py:
-	echo "__version__ = \"$(shell git describe)\"" > $@
+	echo "__version__ = \"$(VERSION)\"" > $@
+
 
 build-dep-fedora:
 	sudo dnf -y install --best --allowerasing \
 		$(foreach ver,$(PG_VERSIONS),postgresql$(ver)-server) \
+		python3-devel \
+		python3-wheel \
 		python3-flake8 \
 		python3-isort \
 		python3-mypy \
@@ -21,7 +25,10 @@ build-dep-fedora:
 		python3-pylint \
 		python3-pytest \
 		python3-yapf \
-		rpm-build
+		python3-hatch-vcs \
+		hatch \
+		rpmdevtools \
+		tar
 
 flake8: $(generated)
 	$(PYTHON) -m flake8 $(PYTHON_SOURCE_DIRS)
@@ -49,12 +56,22 @@ validate-style:
 	diff $(CHANGES_BEFORE) $(CHANGES_AFTER)
 	-rm $(CHANGES_BEFORE) $(CHANGES_AFTER)
 
-.PHONY: test
 test: $(generated)
 	$(PYTHON) -m pytest -v -r test
 
 clean:
-	$(RM) aiven_db_migrate/migrate/version.py
+	$(RM) $(generated)
+	$(RM) aiven_db_migrate-*.tar.gz
+	$(RM) -r dist
 
 rpm:
-	sudo $(PYTHON) setup.py bdist_rpm && rm -rf build/
+	hatch build
+	rpmbuild -bb aiven-db-migrate.spec \
+		--define '_sourcedir $(CURDIR)/dist' \
+		--define '_topdir $(CURDIR)/dist/rpmbuild' \
+		--define '_rpmdir $(CURDIR)/dist/rpms' \
+		--define 'source_dist $(PWD)/dist/aiven_db_migrate-$(VERSION).tar.gz' \
+		--define 'major_version $(VERSION)' \
+		--define 'release_number $(RELEASE)'
+
+.PHONY: build-dep-fedora test clean flake8 pylint mypy isort yapf static-checks validate-style rpm
