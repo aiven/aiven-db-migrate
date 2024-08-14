@@ -452,7 +452,7 @@ class PGRunner:
             grantee = self.testuser
         sql = f"CREATE EXTENSION IF NOT EXISTS {extname}"
         if extversion:
-            sql += f" WITH VERSION {extversion}"
+            sql += f" WITH VERSION '{extversion}'"
         if LooseVersion(self.pgversion) > "9.5":
             sql += " CASCADE"
         try:
