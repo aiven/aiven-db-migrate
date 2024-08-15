@@ -58,6 +58,28 @@ def test_extension_requires_superuser(pg_source_and_target: Tuple[PGRunner, PGRu
     assert str(err.value) == f"Installing extension '{extname}' in target requires superuser"
 
 
+def test_migration_succeeds_when_extensions_that_require_superuser_are_excluded(
+    pg_source_and_target: Tuple[PGRunner, PGRunner]
+) -> None:
+    source, target = pg_source_and_target
+    dbname = random_string()
+    extensions = {"pg_freespacemap", "pg_visibility"}
+
+    source.create_db(dbname=dbname)
+    for extname in extensions:
+        source.create_extension(extname=extname, dbname=dbname)
+
+    pg_mig = PGMigrate(
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        verbose=True,
+        excluded_extensions=",".join(extensions),
+    )
+    assert set(pg_mig.target.excluded_extensions) == extensions
+
+    pg_mig.validate()
+
+
 @pytest.mark.parametrize("createdb", [True, False])
 def test_extension_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
     source, target = pg_source_and_target
