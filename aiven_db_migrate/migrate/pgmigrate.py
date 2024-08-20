@@ -1423,10 +1423,22 @@ def main(args=None, *, prog="pg_migrate"):
     parser = argparse.ArgumentParser(description="PostgreSQL migration tool.", prog=prog)
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging.")
     parser.add_argument(
-        "-s", "--source", help="Source PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
+        "-s",
+        "--source",
+        help=(
+            "Source PostgreSQL server, either postgres:// uri or libpq connection string. "
+            "Required if `SOURCE_SERVICE_URI` environment variable is not set."
+        ),
+        required=not os.getenv("SOURCE_SERVICE_URI"),
     )
     parser.add_argument(
-        "-t", "--target", help="Target PostgreSQL server, either postgres:// uri or libpq connection string.", required=True
+        "-t",
+        "--target",
+        help=(
+            "Target PostgreSQL server, either postgres:// uri or libpq connection string. "
+            "Required if `TARGET_SERVICE_URI` environment variable is not set."
+        ),
+        required=not os.getenv("TARGET_SERVICE_URI"),
     )
     parser.add_argument(
         "-f", "--filtered-db", help="Comma separated list of databases to filter out during migrations", required=False
@@ -1457,16 +1469,16 @@ def main(args=None, *, prog="pg_migrate"):
         "--max-replication-lag",
         type=int,
         default=-1,
-        help="Max replication lag in bytes to wait for, by default no wait (no effect when replication isn't available)."
+        help="Max replication lag in bytes to wait for, by default no wait (no effect when replication isn't available).",
     )
     parser.add_argument(
         "--stop-replication",
         action="store_true",
         help=(
-            "Stop replication, by default replication is left running (no effect when replication isn't available)."
-            " Requires also '--max-replication-lag' >= 0, i.e. wait until replication lag in bytes is less than/equal"
-            " to given max replication lag and then stop replication."
-        )
+            "Stop replication, by default replication is left running (no effect when replication isn't available). "
+            "Requires also '--max-replication-lag' >= 0, i.e. wait until replication lag in bytes is less than/equal "
+            "to given max replication lag and then stop replication."
+        ),
     )
     parser.add_argument("--validate", action="store_true", help="Run only best effort validation.")
     table_common_help = (
@@ -1478,28 +1490,34 @@ def main(args=None, *, prog="pg_migrate"):
     group.add_argument(
         "--with-table",
         action="append",
-        help="When specified, the migration method will include the named tables only instead of all tables."
-        " Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
+        help=(
+            "When specified, the migration method will include the named tables only instead of all tables. "
+            "Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
+        ),
     )
     group.add_argument(
         "--skip-table",
         action="append",
-        help="When specified, the migration method will include all tables except the named tables."
-        " Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
+        help=(
+            "When specified, the migration method will include all tables except the named tables. "
+            "Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
+        ),
     )
     parser.add_argument(
         "--replicate-extension-tables",
         dest="replicate_extension_tables",
         action="store_true",
         default=True,
-        help="logical replication should try to add tables "
-        "belonging to extensions to the publication definition (default)"
+        help=(
+            "logical replication should try to add tables "
+            "belonging to extensions to the publication definition (default)"
+        ),
     )
     parser.add_argument(
         "--no-replicate-extension-tables",
         dest="replicate_extension_tables",
         action="store_false",
-        help="Do not add tables belonging to extensions to the publication definition"
+        help="Do not add tables belonging to extensions to the publication definition",
     )
     parser.add_argument(
         "--force-method",
@@ -1527,8 +1545,8 @@ def main(args=None, *, prog="pg_migrate"):
         logging.basicConfig(level=logging.INFO, format=log_format)
 
     pg_mig = PGMigrate(
-        source_conn_info=args.source,
-        target_conn_info=args.target,
+        source_conn_info=os.getenv("SOURCE_SERVICE_URI") or args.source,
+        target_conn_info=os.getenv("TARGET_SERVICE_URI") or args.target,
         pgbin=args.pgbin,
         createdb=args.createdb,
         max_replication_lag=args.max_replication_lag,

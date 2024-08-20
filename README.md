@@ -69,6 +69,9 @@ server and `aiven-extras` extension is installed in target database.
 
 ```
 $ pg_migrate -s "postgres://postgres:<password>@jappja-pg1.chfhzaircbpb.eu-west-1.rds.amazonaws.com:5432/defaultdb" -t "postgres://avnadmin:<password>@pg1-test-jappja-test.avns.net:26192/defaultdb?sslmode=require"
+
+# Or:
+$ SOURCE_SERVICE_URI="postgres://postgres:<password>@jappja-pg1.chfhzaircbpb.eu-west-1.rds.amazonaws.com:5432/defaultdb" TARGET_SERVICE_URI="postgres://avnadmin:<password>@pg1-test-jappja-test.avns.net:26192/defaultdb?sslmode=require" pg_migrate
 ...
 
 Roles:
