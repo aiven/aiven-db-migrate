@@ -223,7 +223,7 @@ class PGCluster:
         if with_extras:
             try:
                 self.c("CREATE EXTENSION aiven_extras CASCADE", dbname=dbname)
-            except psycopg2.ProgrammingError as e:
+            except (psycopg2.ProgrammingError, psycopg2.NotSupportedError) as e:
                 self.log.info(e)
         try:
             exts = self.c("SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname)
@@ -803,6 +803,7 @@ class PGMigrate:
         skip_tables: Optional[List[str]] = None,
         with_tables: Optional[List[str]] = None,
         replicate_extensions: bool = True,
+        skip_db_version_check: bool = False,
     ):
         if skip_tables and with_tables:
             raise Exception("Can only specify a skip table list or a with table list")
@@ -836,6 +837,7 @@ class PGMigrate:
         self.verbose = verbose
         self.mangle = mangle
         self.replicate_extensions = replicate_extensions
+        self.skip_db_version_check = skip_db_version_check
 
     def _convert_table_names(self, tables: Optional[List[str]]) -> Set[PGTable]:
         ret: Set[PGTable] = set()
@@ -940,7 +942,13 @@ class PGMigrate:
     def _check_db_versions(self) -> None:
         """Check that the version of the target database is the same or more recent than the source database."""
         if self.source.version > self.target.version:
-            raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
+            if self.skip_db_version_check:
+                self.log.warning(
+                    "Migrating to older PostgreSQL server version is not recommended. Source: %s, Target: %s" %
+                    (self.source.version, self.target.version)
+                )
+            else:
+                raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
 
     def _check_databases(self):
         for db in self.source.databases.values():
@@ -1536,6 +1544,11 @@ def main(args=None, *, prog="pg_migrate"):
         default=None,
         help="Path to pg_dump and other postgresql binaries",
     )
+    parser.add_argument(
+        "--skip-db-version-check",
+        action="store_true",
+        help="Skip PG version check between source and target",
+    )
 
     args = parser.parse_args(args)
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1559,6 +1572,7 @@ def main(args=None, *, prog="pg_migrate"):
         skip_tables=args.skip_table,
         with_tables=args.with_table,
         replicate_extensions=args.replicate_extension_tables,
+        skip_db_version_check=args.skip_db_version_check,
     )
 
     method = None
