@@ -20,7 +20,7 @@ jobs:
       run: sudo ./ci/install.sh
 
     - name: Install dependencies
-      run: pip install -r requirements-dev.txt
+      run: pip install '.[dev]'
 
     - name: Execute unit-tests
       run: make test
