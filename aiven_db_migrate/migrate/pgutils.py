@@ -21,6 +21,7 @@ def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_d
     """
     min_version = LooseVersion(pgversion).version
     max_version = min_version if max_pgversion is None else LooseVersion(max_pgversion).version
+    max_version = max(max_version, min_version)
     max_parts = 1
     candidates = []
     search_scopes = [(usr_dir, r"pgsql-([0-9]+(\.[0-9]+)*)"), (usr_dir / "lib/postgresql", r"([0-9]+(\.[0-9]+)*)")]
