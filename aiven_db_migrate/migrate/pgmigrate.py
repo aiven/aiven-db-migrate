@@ -455,7 +455,7 @@ class PGSource(PGCluster):
 
     def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
         mangled_name = self.mangle_db_name(dbname)
-        pubname = f"aiven_db_migrate_{mangled_name}_pub"
+        pubname = f"managed_db_migrate_{mangled_name}_pub"
         validate_pg_identifier_length(pubname)
 
         pub_options: Union[List[str], str]
@@ -499,7 +499,7 @@ class PGSource(PGCluster):
 
     def create_replication_slot(self, *, dbname: str) -> str:
         mangled_name = self.mangle_db_name(dbname)
-        slotname = f"aiven_db_migrate_{mangled_name}_slot"
+        slotname = f"managed_db_migrate_{mangled_name}_slot"
         validate_pg_identifier_length(slotname)
 
         self.log.info("Creating replication slot %r in database %r", slotname, dbname)
@@ -594,7 +594,7 @@ class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
     def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
         mangled_name = self.mangle_db_name(dbname)
-        subname = f"aiven_db_migrate_{mangled_name}_sub"
+        subname = f"managed_db_migrate_{mangled_name}_sub"
         validate_pg_identifier_length(subname)
 
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
