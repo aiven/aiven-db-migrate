@@ -7,8 +7,8 @@ from _pytest.tmpdir import TempPathFactory
 from aiven_db_migrate.migrate.pgmigrate import PGTarget
 from contextlib import contextmanager
 from copy import copy
-from distutils.version import LooseVersion
 from functools import partial, wraps
+from packaging.version import Version
 from pathlib import Path
 from psycopg2.extras import LogicalReplicationConnection, ReplicationCursor
 from test.utils import PGRunner, SUPPORTED_PG_VERSIONS
@@ -100,7 +100,7 @@ def generate_fixtures():
         source_name = f"{name_prefix}_source"
         inject_pg_fixture(name=source_name, pgversion=source, with_gatekeeper=False)
         for target in pg_target_versions:
-            if LooseVersion(source) > LooseVersion(target):
+            if Version(source) > Version(target):
                 continue
             name_prefix = "pg{}".format(target.replace(".", ""))
             target_name = f"{name_prefix}_target"

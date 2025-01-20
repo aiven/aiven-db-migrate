@@ -1,6 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
 from aiven_db_migrate.migrate.pgmigrate import PGSource, PGTarget
+from packaging.version import Version
 from test.utils import PGRunner, random_string, Timer
 from typing import Tuple
 
@@ -114,7 +115,13 @@ def test_replication_no_aiven_extras_no_superuser(pg_source_and_target: Tuple[PG
     with pytest.raises(psycopg2.ProgrammingError) as err:
         pg_target.create_subscription(conn_str=pg_source.conn_str(), pubname="dummy", slotname="dummy", dbname=dbname)
     assert err.value.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE
-    assert err.value.diag.message_primary == "must be superuser to create subscriptions"
+
+    privilege_error_message = "must be superuser to create subscriptions"
+    # error message was changed
+    if pg_target.version >= Version("16"):
+        privilege_error_message = "permission denied to create subscription"
+
+    assert err.value.diag.message_primary == privilege_error_message
 
     # verify that there's no leftovers
     assert not source.list_pubs(dbname=dbname)

@@ -1,7 +1,7 @@
 
 PYTHON ?= python3
 PYTHON_SOURCE_DIRS = aiven_db_migrate/ test/
-PG_VERSIONS = 10 11 12 13 14
+PG_VERSIONS = 13 14 15 16 17
 
 generated = aiven_db_migrate/migrate/version.py
 
@@ -51,7 +51,7 @@ validate-style:
 
 .PHONY: test
 test: $(generated)
-	$(PYTHON) -m pytest -v -r test
+	$(PYTHON) -m pytest -vv -r test
 
 clean:
 	$(RM) aiven_db_migrate/migrate/version.py

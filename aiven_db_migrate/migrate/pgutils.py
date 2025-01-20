@@ -1,5 +1,5 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-from distutils.version import LooseVersion
+from packaging.version import Version
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
@@ -19,8 +19,8 @@ def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_d
 
     Versions equal or above 10 only check the major version number: 10, 11, 12, 13...
     """
-    min_version = LooseVersion(pgversion).version
-    max_version = min_version if max_pgversion is None else LooseVersion(max_pgversion).version
+    min_version = list(Version(pgversion).release)
+    max_version = min_version if max_pgversion is None else list(Version(max_pgversion).release)
     max_version = max(max_version, min_version)
     max_parts = 1
     candidates = []
@@ -31,7 +31,7 @@ def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_d
                 match = re.search(pattern, path.name)
                 bin_path = path / "bin"
                 if match and bin_path.is_dir():
-                    candidate_version = LooseVersion(match.group(1)).version
+                    candidate_version = list(Version(match.group(1)).release)
                     if min_version[:max_parts] <= candidate_version[:max_parts] <= max_version[:max_parts]:
                         candidates.append((candidate_version, bin_path))
     candidates.sort()

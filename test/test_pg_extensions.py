@@ -2,7 +2,7 @@
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGExtension, PGMigrate
-from distutils.version import LooseVersion
+from packaging.version import Version
 from test.utils import PGRunner, random_string
 from typing import Tuple
 
@@ -34,7 +34,7 @@ def test_defaults(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: boo
     for dbname in dbnames:
         for ext1 in pg_mig.source.databases[dbname].pg_ext:
             ext2 = next(e for e in pg_mig.target.databases[dbname].pg_ext if e.name == ext1.name)
-            assert LooseVersion(ext2.version) >= LooseVersion(ext1.version)
+            assert Version(ext2.version) >= Version(ext1.version)
 
 
 @pytest.mark.parametrize("createdb", [True, False])
@@ -107,7 +107,7 @@ def test_extension_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
 
     for ext1 in pg_mig.source.databases[dbname].pg_ext:
         ext2 = next(e for e in pg_mig.target.databases[dbname].pg_ext if e.name == ext1.name)
-        assert LooseVersion(ext2.version) >= LooseVersion(ext1.version)
+        assert Version(ext2.version) >= Version(ext1.version)
 
 
 @pytest.mark.parametrize("createdb", [True, False])
@@ -141,7 +141,7 @@ def test_extension_whitelist(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
     for dbname in dbnames:
         for ext1 in pg_mig.source.databases[dbname].pg_ext:
             ext2 = next(e for e in pg_mig.target.databases[dbname].pg_ext if e.name == ext1.name)
-            assert LooseVersion(ext2.version) >= LooseVersion(ext1.version)
+            assert Version(ext2.version) >= Version(ext1.version)
 
 
 @pytest.mark.parametrize("createdb", [True, False])

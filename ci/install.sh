@@ -13,10 +13,10 @@ echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" 
 wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
 apt-get -y update
 apt-get install -y \
-  postgresql-{10,11,12,13,14} \
-  postgresql-server-dev-{10,11,12,13,14} \
-  postgresql-{10,11,12,13,14}-postgis-3 \
-  postgresql-{10,11,12,13,14}-pgextwlist
+  postgresql-{13,14,15,16,17} \
+  postgresql-server-dev-{13,14,15,16,17} \
+  postgresql-{13,14,15,16,17}-postgis-3 \
+  postgresql-{13,14,15,16,17}-pgextwlist
 
 # Install aiven-extras, using the latest tag.
 git clone https://github.com/aiven/aiven-extras "${AIVEN_EXTRAS_TARGET}"
@@ -36,11 +36,11 @@ git -C "${AIVEN_PG_SECURITY_TARGET}" checkout ${AIVEN_PG_SECURITY_TAG}
 
 # maybe add a deb target to aiven-extras in the future, but for now, while hacky, this is (probably) terser and less intrusive
 
-for dest in "10" "11" "12" "13" "14"
+for dest in "13" "14" "15" "16" "17"
 do
     gcc -fPIC -I/usr/include/postgresql/${dest}/server \
-      -D_GNU_SOURCE -I/usr/include/libxml2  -I/usr/include -c -o standby_slots.o $AIVEN_EXTRAS_TARGET/src/standby_slots.c
-    gcc -fPIC -shared -o aiven_extras.so standby_slots.o -L/usr/lib/postgresql/${dest} \
+      -D_GNU_SOURCE -I/usr/include/libxml2  -I/usr/include -c -o aiven_extras.o $AIVEN_EXTRAS_TARGET/src/aiven_extras.c
+    gcc -fPIC -shared -o aiven_extras.so aiven_extras.o -L/usr/lib/postgresql/${dest} \
       -L/usr/lib64  -L/usr/lib64 -Wl,--as-needed -Wl,-rpath,/usr/lib/postgresql/${dest},--enable-new-dtags
 
     mkdir -p /usr/lib/postgresql/${dest}/lib/

@@ -11,7 +11,7 @@ from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-from distutils.version import LooseVersion
+from packaging.version import Version
 from pathlib import Path
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
@@ -100,7 +100,7 @@ class PGCluster:
     conn_info: Dict[str, Any]
     _databases: Dict[str, PGDatabase]
     _params: Dict[str, str]
-    _version: Optional[LooseVersion]
+    _version: Optional[Version]
     _attributes: Optional[Dict[str, Any]]
     _pg_ext: Optional[List[PGExtension]]
     _pg_ext_whitelist: Optional[List[str]]
@@ -206,10 +206,10 @@ class PGCluster:
         return self._params
 
     @property
-    def version(self) -> LooseVersion:
+    def version(self) -> Version:
         if self._version is None:
             # will make this work on ubuntu, for strings like '12.5 (Ubuntu 12.5-1.pgdg18.04+1)'
-            self._version = LooseVersion(self.params["server_version"].split(" ")[0])
+            self._version = Version(self.params["server_version"].split(" ")[0])
         return self._version
 
     @property
@@ -286,7 +286,7 @@ class PGCluster:
         if self._pg_ext is None:
             # Starting from PotsgreSQL 13, extensions have a trusted flag that means
             # they can be created without being superuser.
-            trusted_field = ", extver.trusted" if self.version >= LooseVersion("13") else ""
+            trusted_field = ", extver.trusted" if self.version >= Version("13") else ""
             exts = self.c(
                 f"""
                 SELECT extver.name, extver.version, extver.superuser {trusted_field}
@@ -355,7 +355,7 @@ class PGCluster:
 
     @property
     def replication_available(self) -> bool:
-        return self.version >= "10"
+        return self.version >= Version("10")
 
     @property
     def replication_slots_count(self) -> int:
@@ -460,7 +460,7 @@ class PGSource(PGCluster):
 
         pub_options: Union[List[str], str]
         pub_options = ["INSERT", "UPDATE", "DELETE"]
-        if self.version >= "11":
+        if self.version >= Version("11"):
             pub_options.append("TRUNCATE")
         pub_options = ",".join(pub_options)
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
@@ -1012,7 +1012,7 @@ class PGMigrate:
                             "Extension %r is installed in source and target database %r, source version: %r, "
                             "target version: %r", source_ext.name, dbname, source_ext.version, target_ext.version
                         )
-                        if LooseVersion(source_ext.version) <= LooseVersion(target_ext.version):
+                        if Version(source_ext.version) <= Version(target_ext.version):
                             continue
                         msg = (
                             f"Installed extension {source_ext.name!r} in target database {dbname!r} is older than "
@@ -1034,7 +1034,7 @@ class PGMigrate:
                     target_ext.version, source_ext.version
                 )
 
-                if LooseVersion(target_ext.version) < LooseVersion(source_ext.version):
+                if Version(target_ext.version) < Version(source_ext.version):
                     msg = (
                         f"Extension {target_ext.name!r} version available for installation in target is too old, "
                         f"source version: {source_ext.version}, target version: {target_ext.version}"
@@ -1220,7 +1220,7 @@ class PGMigrate:
 
         # PG 13 and older versions do not support `--extension` option.
         # The migration still succeeds with some unharmful error messages in the output.
-        if db and self.source.version >= LooseVersion("14"):
+        if db and self.source.version >= Version("14"):
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         if self.createdb:
@@ -1246,7 +1246,7 @@ class PGMigrate:
 
         # PG 13 and older versions do not support `--extension` option.
         # The migration still succeeds with some unharmful error messages in the output.
-        if self.source.version >= LooseVersion("14"):
+        if self.source.version >= Version("14"):
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         subtask: PGSubTask = self._pg_dump_pipe_psql(

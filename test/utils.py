@@ -5,7 +5,7 @@ from aiven_db_migrate.migrate.pgmigrate import PGTarget
 from aiven_db_migrate.migrate.pgutils import find_pgbin_dir
 from contextlib import contextmanager
 from datetime import datetime
-from distutils.version import LooseVersion
+from packaging.version import Version
 from pathlib import Path
 from psycopg2._psycopg import connection
 from psycopg2.extras import RealDictCursor
@@ -21,7 +21,7 @@ import subprocess
 import threading
 import time
 
-SUPPORTED_PG_VERSIONS = ["10", "11", "12", "13", "14"]
+SUPPORTED_PG_VERSIONS = ["13", "14", "15", "16", "17"]
 
 
 def random_string(length=20):
@@ -453,7 +453,7 @@ class PGRunner:
         sql = f"CREATE EXTENSION IF NOT EXISTS {extname}"
         if extversion:
             sql += f" WITH VERSION '{extversion}'"
-        if LooseVersion(self.pgversion) > "9.5":
+        if Version(self.pgversion) > Version("9.5"):
             sql += " CASCADE"
         try:
             with self.cursor(username=self.superuser, dbname=dbname) as cur:
@@ -478,7 +478,7 @@ class PGRunner:
 
     def drop_extension(self, *, extname: str, dbname: str):
         sql = f"DROP EXTENSION IF EXISTS {extname}"
-        if LooseVersion(self.pgversion) > "9.5":
+        if Version(self.pgversion) > Version("9.5"):
             sql += " CASCADE"
         with self.cursor(username=self.superuser, dbname=dbname) as cur:
             cur.execute(sql)

@@ -1,7 +1,7 @@
 # Copyright (c) 2021 Aiven, Helsinki, Finland. https://aiven.io/
 from aiven_db_migrate.migrate.pgmigrate import PGCluster
-from distutils.version import LooseVersion
 from multiprocessing import Process
+from packaging.version import Version
 from test.utils import PGRunner
 
 import os
@@ -30,7 +30,7 @@ def test_trusted_extensions(pg_cluster: PGRunner):
     known_trusted = {"btree_gin", "btree_gist", "hstore", "intarray", "pgcrypto", "plpgsql", "unaccent"}
     known_untrusted = {"pg_buffercache", "pg_freespacemap", "pg_prewarm", "pg_stat_statements"}
     cluster = PGCluster(conn_info=pg_cluster.conn_info())
-    if cluster.version >= LooseVersion("13"):
+    if cluster.version >= Version("13"):
         for extension in cluster.pg_ext:
             assert isinstance(extension.trusted, bool)
             if extension.name in known_trusted:

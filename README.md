@@ -13,7 +13,7 @@ such as `pg_dumpall`, not useful when migrating database to/from service provide
 
 Currently this tool supports only PostgreSQL but we aim to add support for other databases, such as MySQL.
 
-Requires Python 3.9 or newer.
+Requires Python 3.10 or newer.
 
 ## Usage
 

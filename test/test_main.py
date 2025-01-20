@@ -7,7 +7,7 @@ import re
 
 
 @mock.patch.object(PGMigrate, "_check_aiven_pg_security_agent")
-@mock.patch.object(PGCluster, "params", new_callable=mock.PropertyMock, return_value={"server_version": "11.13"})
+@mock.patch.object(PGCluster, "params", new_callable=mock.PropertyMock, return_value={"server_version": "16.4"})
 @mock.patch.object(PGCluster, "databases", new_callable=mock.PropertyMock, return_value={})
 @mock.patch.object(PGCluster, "pg_lang", new_callable=mock.PropertyMock, return_value={})
 @mock.patch.object(PGMigrate, "migrate")
