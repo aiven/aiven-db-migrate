@@ -45,19 +45,18 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
     pubname = pg_source.create_publication(dbname=dbname)
     slotname = pg_source.create_replication_slot(dbname=dbname)
     # verify that pub and replication slot exixts
-    pub = pg_source.get_publication(dbname=dbname, pubname=pubname)
+    pub = pg_source.get_publication(dbname=dbname)
     assert pub
     assert pub["pubname"] == pubname
-    slot = pg_source.get_replication_slot(dbname=dbname, slotname=slotname)
+    slot = pg_source.get_replication_slot(dbname=dbname)
     assert slot
     assert slot["slot_name"] == slotname
     assert slot["slot_type"] == "logical"
 
-    subname = pg_target.create_subscription(
-        conn_str=pg_source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
-    )
+    conn_str = pg_source.conn_str(dbname=dbname)
+    subname = pg_target.create_subscription(conn_str=conn_str, dbname=dbname)
     # verify that sub exists
-    sub = pg_target.get_subscription(dbname=dbname, subname=subname)
+    sub = pg_target.get_subscription(dbname=dbname)
     assert sub
     assert sub["subname"] == subname
     assert sub["subenabled"]
@@ -69,10 +68,8 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
     # wait until replication is in sync
     timer = Timer(timeout=10, what="replication in sync")
     while timer.loop():
-        in_sync, write_lsn = pg_source.replication_in_sync(dbname=dbname, slotname=slotname, max_replication_lag=0)
-        if in_sync and pg_target.replication_in_sync(
-            dbname=dbname, subname=subname, write_lsn=write_lsn, max_replication_lag=0
-        ):
+        in_sync, write_lsn = pg_source.replication_in_sync(dbname=dbname, max_replication_lag=0)
+        if in_sync and pg_target.replication_in_sync(dbname=dbname, write_lsn=write_lsn, max_replication_lag=0):
             break
 
     # verify that all data has been replicated
@@ -82,8 +79,8 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
         if int(count["count"]) == 5:
             break
 
-    pg_target.cleanup(dbname=dbname, subname=subname)
-    pg_source.cleanup(dbname=dbname, pubname=pubname, slotname=slotname)
+    pg_target.cleanup(dbname=dbname)
+    pg_source.cleanup(dbname=dbname)
 
     # verify that pub, replication slot and sub are dropped
     assert not source.list_pubs(dbname=dbname)
@@ -113,7 +110,7 @@ def test_replication_no_aiven_extras_no_superuser(pg_source_and_target: Tuple[PG
 
     # creating subscription should fail with insufficient privilege
     with pytest.raises(psycopg2.ProgrammingError) as err:
-        pg_target.create_subscription(conn_str=pg_source.conn_str(), pubname="dummy", slotname="dummy", dbname=dbname)
+        pg_target.create_subscription(conn_str=pg_source.conn_str(), dbname=dbname)
     assert err.value.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE
 
     privilege_error_message = "must be superuser to create subscriptions"

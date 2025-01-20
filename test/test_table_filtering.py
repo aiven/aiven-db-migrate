@@ -213,8 +213,6 @@ def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], 
             except psycopg2.Error:
                 pass
             try:
-                pg_mig.source.cleanup(
-                    dbname=db, pubname=f"managed_db_migrate_{db}_pub", slotname=f"managed_db_migrate_{db}_slot"
-                )
+                pg_mig.source.cleanup(dbname=db)
             except:  # pylint: disable=bare-except
                 pass

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from _pytest.fixtures import FixtureRequest
 from _pytest.tmpdir import TempPathFactory
-from aiven_db_migrate.migrate.pgmigrate import PGTarget
+from aiven_db_migrate.migrate.pgmigrate import PGTarget, ReplicationObjectType
 from contextlib import contextmanager
 from copy import copy
 from functools import partial, wraps
@@ -154,8 +154,12 @@ def clean_replication_slots_for_runner(pg_runner: PGRunner) -> Callable[[Callabl
                     break  # Found it, no need to try other databases.
 
         @wraps(function)
-        def wrapper(self: PGTarget, *args, slotname: str, **kwargs) -> R:
-            subname = function(self, *args, slotname=slotname, **kwargs)
+        def wrapper(self: PGTarget, *args, dbname: str, **kwargs) -> R:
+            subname = function(self, *args, dbname=dbname, **kwargs)
+            slotname = self.get_replication_object_name(
+                dbname=dbname,
+                replication_obj_type=ReplicationObjectType.REPLICATION_SLOT,
+            )
 
             pg_runner.cleanups.append(partial(_drop_replication_slot, pg_runner_=pg_runner, slot_name=slotname))
 
