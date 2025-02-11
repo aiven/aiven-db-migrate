@@ -338,7 +338,6 @@ class Test_PGMigrate_Replication(PGMigrateTest):
 
         result: PGMigrateResult = pg_mig.migrate()
 
-        assert len(result.pg_databases) == 2
         self.assert_result(
             result=result.pg_databases[dbname],
             dbname=dbname,

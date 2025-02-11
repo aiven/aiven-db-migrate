@@ -11,7 +11,7 @@ from contextlib import contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
-from distutils.version import LooseVersion
+from packaging.version import Version
 from pathlib import Path
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
@@ -33,6 +33,15 @@ import threading
 import time
 
 MAX_CLI_LEN = 2097152  # getconf ARG_MAX
+
+
+class ReplicationObjectType(enum.Enum):
+    PUBLICATION = "pub"
+    SUBSCRIPTION = "sub"
+    REPLICATION_SLOT = "slot"
+
+    def get_display_name(self) -> str:
+        return self.name.replace("_", " ").lower()
 
 
 @dataclass
@@ -97,10 +106,11 @@ class PGRole:
 
 class PGCluster:
     """PGCluster is a collection of databases managed by a single PostgreSQL server instance"""
+    DB_OBJECT_PREFIX = "managed_db_migrate"
     conn_info: Dict[str, Any]
     _databases: Dict[str, PGDatabase]
     _params: Dict[str, str]
-    _version: Optional[LooseVersion]
+    _version: Optional[Version]
     _attributes: Optional[Dict[str, Any]]
     _pg_ext: Optional[List[PGExtension]]
     _pg_ext_whitelist: Optional[List[str]]
@@ -206,10 +216,10 @@ class PGCluster:
         return self._params
 
     @property
-    def version(self) -> LooseVersion:
+    def version(self) -> Version:
         if self._version is None:
             # will make this work on ubuntu, for strings like '12.5 (Ubuntu 12.5-1.pgdg18.04+1)'
-            self._version = LooseVersion(self.params["server_version"].split(" ")[0])
+            self._version = Version(self.params["server_version"].split(" ")[0])
         return self._version
 
     @property
@@ -286,7 +296,7 @@ class PGCluster:
         if self._pg_ext is None:
             # Starting from PotsgreSQL 13, extensions have a trusted flag that means
             # they can be created without being superuser.
-            trusted_field = ", extver.trusted" if self.version >= LooseVersion("13") else ""
+            trusted_field = ", extver.trusted" if self.version >= Version("13") else ""
             exts = self.c(
                 f"""
                 SELECT extver.name, extver.version, extver.superuser {trusted_field}
@@ -355,7 +365,7 @@ class PGCluster:
 
     @property
     def replication_available(self) -> bool:
-        return self.version >= "10"
+        return self.version >= Version("10")
 
     @property
     def replication_slots_count(self) -> int:
@@ -438,6 +448,28 @@ class PGCluster:
             return db_name
         return hashlib.md5(db_name.encode()).hexdigest()
 
+    def get_replication_object_name(self, dbname: str, replication_obj_type: ReplicationObjectType) -> str:
+        mangled_name = self.mangle_db_name(dbname)
+        return f"{self.DB_OBJECT_PREFIX}_{mangled_name}_{replication_obj_type.value}"
+
+    def get_publication_name(self, dbname: str) -> str:
+        return self.get_replication_object_name(
+            dbname=dbname,
+            replication_obj_type=ReplicationObjectType.PUBLICATION,
+        )
+
+    def get_subscription_name(self, dbname: str) -> str:
+        return self.get_replication_object_name(
+            dbname=dbname,
+            replication_obj_type=ReplicationObjectType.SUBSCRIPTION,
+        )
+
+    def get_replication_slot_name(self, dbname: str) -> str:
+        return self.get_replication_object_name(
+            dbname=dbname,
+            replication_obj_type=ReplicationObjectType.REPLICATION_SLOT,
+        )
+
 
 class PGSource(PGCluster):
     """Source PostgreSQL cluster"""
@@ -454,13 +486,12 @@ class PGSource(PGCluster):
         return result[0]["size"] or 0
 
     def create_publication(self, *, dbname: str, only_tables: Optional[List[str]] = None) -> str:
-        mangled_name = self.mangle_db_name(dbname)
-        pubname = f"managed_db_migrate_{mangled_name}_pub"
+        pubname = self.get_publication_name(dbname)
         validate_pg_identifier_length(pubname)
 
         pub_options: Union[List[str], str]
         pub_options = ["INSERT", "UPDATE", "DELETE"]
-        if self.version >= "11":
+        if self.version >= Version("11"):
             pub_options.append("TRUNCATE")
         pub_options = ",".join(pub_options)
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
@@ -498,8 +529,8 @@ class PGSource(PGCluster):
         return pubname
 
     def create_replication_slot(self, *, dbname: str) -> str:
-        mangled_name = self.mangle_db_name(dbname)
-        slotname = f"managed_db_migrate_{mangled_name}_slot"
+        slotname = self.get_replication_slot_name(dbname)
+
         validate_pg_identifier_length(slotname)
 
         self.log.info("Creating replication slot %r in database %r", slotname, dbname)
@@ -516,12 +547,14 @@ class PGSource(PGCluster):
 
         return slotname
 
-    def get_publication(self, *, dbname: str, pubname: str) -> Dict[str, Any]:
+    def get_publication(self, *, dbname: str) -> Dict[str, Any]:
+        pubname = self.get_publication_name(dbname)
         # publications as per database so connect to given database
         result = self.c("SELECT * FROM pg_catalog.pg_publication WHERE pubname = %s", args=(pubname, ), dbname=dbname)
         return result[0] if result else {}
 
-    def get_replication_slot(self, *, dbname: str, slotname: str) -> Dict[str, Any]:
+    def get_replication_slot(self, *, dbname: str) -> Dict[str, Any]:
+        slotname = self.get_replication_slot_name(dbname)
         result = self.c(
             "SELECT * from pg_catalog.pg_replication_slots WHERE database = %s AND slot_name = %s",
             args=(
@@ -532,7 +565,8 @@ class PGSource(PGCluster):
         )
         return result[0] if result else {}
 
-    def replication_in_sync(self, *, dbname: str, slotname: str, max_replication_lag: int) -> Tuple[bool, str]:
+    def replication_in_sync(self, *, dbname: str, max_replication_lag: int) -> Tuple[bool, str]:
+        slotname = self.get_replication_slot_name(dbname)
         exists = self.c(
             "SELECT 1 FROM pg_catalog.pg_replication_slots WHERE slot_name = %s", args=(slotname, ), dbname=dbname
         )
@@ -573,28 +607,52 @@ class PGSource(PGCluster):
         self.log.warning("Unable to determine if large objects present in database %r", dbname)
         return False
 
-    def cleanup(self, *, dbname: str, pubname: str, slotname: str):
-        # publications as per database so connect to correct database
-        pub = self.get_publication(dbname=dbname, pubname=pubname)
-        if pub:
-            self.log.info("Dropping publication %r from database %r", pub, dbname)
-            self.c("DROP PUBLICATION {}".format(pub["pubname"]), dbname=dbname, return_rows=0)
-        slot = self.get_replication_slot(dbname=dbname, slotname=slotname)
-        if slot:
-            self.log.info("Dropping replication slot %r from database %r", slot, dbname)
-            self.c(
-                "SELECT 1 FROM pg_catalog.pg_drop_replication_slot(%s)",
-                args=(slot["slot_name"], ),
-                dbname=dbname,
-                return_rows=0
+    def cleanup(self, *, dbname: str):
+        self._cleanup_replication_object(dbname=dbname, replication_object_type=ReplicationObjectType.PUBLICATION)
+        self._cleanup_replication_object(dbname=dbname, replication_object_type=ReplicationObjectType.REPLICATION_SLOT)
+
+    def _cleanup_replication_object(self, dbname: str, replication_object_type: ReplicationObjectType):
+        rep_obj_type_display_name = replication_object_type.get_display_name()
+
+        rep_obj_name = self.get_replication_object_name(
+            dbname=dbname,
+            replication_obj_type=replication_object_type,
+        )
+        try:
+            if replication_object_type is ReplicationObjectType.PUBLICATION:
+                delete_query = f"DROP PUBLICATION {rep_obj_name};"
+                args = ()
+            elif replication_object_type is ReplicationObjectType.REPLICATION_SLOT:
+                delete_query = f"SELECT 1 FROM pg_catalog.pg_drop_replication_slot(%s)"
+                args = (rep_obj_name, )
+            else:
+                # cleanup only handles publications and replication slots in source.
+                return
+
+            self.log.info(
+                "Dropping %r %r from database %r",
+                rep_obj_type_display_name,
+                rep_obj_name,
+                dbname,
+            )
+            self.c(delete_query, args=args, dbname=dbname, return_rows=0)
+        except Exception as exc:
+            self.log.error(
+                "Failed to drop %r %r for database %r: %s",
+                rep_obj_type_display_name,
+                rep_obj_name,
+                dbname,
+                exc,
             )
 
 
 class PGTarget(PGCluster):
     """Target PostgreSQL cluster"""
-    def create_subscription(self, *, conn_str: str, pubname: str, slotname: str, dbname: str) -> str:
-        mangled_name = self.mangle_db_name(dbname)
-        subname = f"managed_db_migrate_{mangled_name}_sub"
+    def create_subscription(self, *, conn_str: str, dbname: str) -> str:
+        pubname = self.get_publication_name(dbname)
+        slotname = self.get_replication_slot_name(dbname)
+
+        subname = self.get_subscription_name(dbname)
         validate_pg_identifier_length(subname)
 
         has_aiven_extras = self.has_aiven_extras(dbname=dbname)
@@ -630,7 +688,8 @@ class PGTarget(PGCluster):
 
         return subname
 
-    def get_subscription(self, *, dbname: str, subname: str) -> Dict[str, Any]:
+    def get_subscription(self, *, dbname: str) -> Dict[str, Any]:
+        subname = self.get_subscription_name(dbname)
         if self.has_aiven_extras(dbname=dbname):
             result = self.c(
                 "SELECT * FROM aiven_extras.pg_list_all_subscriptions() WHERE subname = %s", args=(subname, ), dbname=dbname
@@ -640,7 +699,8 @@ class PGTarget(PGCluster):
             result = self.c("SELECT * FROM pg_catalog.pg_subscription WHERE subname = %s", args=(subname, ), dbname=dbname)
         return result[0] if result else {}
 
-    def replication_in_sync(self, *, dbname: str, subname: str, write_lsn: str, max_replication_lag: int) -> bool:
+    def replication_in_sync(self, *, dbname: str, write_lsn: str, max_replication_lag: int) -> bool:
+        subname = self.get_subscription_name(dbname)
         status = self.c(
             """
             SELECT stat.*,
@@ -664,23 +724,29 @@ class PGTarget(PGCluster):
         self.log.warning("Replication status not available for %r in database %r", subname, dbname)
         return False
 
-    def cleanup(self, *, dbname: str, subname: str):
-        sub = self.get_subscription(dbname=dbname, subname=subname)
-        if sub:
-            self.log.info("Dropping subscription %r from database %r", sub["subname"], dbname)
+    def cleanup(self, *, dbname: str):
+        subname = self.get_subscription_name(dbname)
+        try:
+            if not self.get_subscription(dbname=dbname):
+                return
+
+            self.log.info("Dropping subscription %r from database %r", subname, dbname)
             if self.has_aiven_extras(dbname=dbname):
                 # NOTE: this drops also replication slot from source
-                self.c(
-                    "SELECT * FROM aiven_extras.pg_drop_subscription(%s)",
-                    args=(sub["subname"], ),
-                    dbname=dbname,
-                    return_rows=0
-                )
+                self.c("SELECT * FROM aiven_extras.pg_drop_subscription(%s)", args=(subname, ), dbname=dbname, return_rows=0)
             else:
                 # requires superuser or superuser-like privileges, such as "rds_replication" role in AWS RDS
-                self.c("ALTER SUBSCRIPTION {} DISABLE".format(sub["subname"]), dbname=dbname, return_rows=0)
-                self.c("ALTER SUBSCRIPTION {} SET (slot_name = NONE)".format(sub["subname"]), dbname=dbname, return_rows=0)
-                self.c("DROP SUBSCRIPTION {}".format(sub["subname"]), dbname=dbname, return_rows=0)
+                self.c("ALTER SUBSCRIPTION {} DISABLE".format(subname), dbname=dbname, return_rows=0)
+                self.c("ALTER SUBSCRIPTION {} SET (slot_name = NONE)".format(subname), dbname=dbname, return_rows=0)
+                self.c("DROP SUBSCRIPTION {}".format(subname), dbname=dbname, return_rows=0)
+
+        except Exception as exc:
+            self.log.error(
+                "Failed to drop subscription %r for database %r: %s",
+                subname,
+                dbname,
+                exc,
+            )
 
 
 @enum.unique
@@ -1012,7 +1078,7 @@ class PGMigrate:
                             "Extension %r is installed in source and target database %r, source version: %r, "
                             "target version: %r", source_ext.name, dbname, source_ext.version, target_ext.version
                         )
-                        if LooseVersion(source_ext.version) <= LooseVersion(target_ext.version):
+                        if Version(source_ext.version) <= Version(target_ext.version):
                             continue
                         msg = (
                             f"Installed extension {source_ext.name!r} in target database {dbname!r} is older than "
@@ -1034,7 +1100,7 @@ class PGMigrate:
                     target_ext.version, source_ext.version
                 )
 
-                if LooseVersion(target_ext.version) < LooseVersion(source_ext.version):
+                if Version(target_ext.version) < Version(source_ext.version):
                     msg = (
                         f"Extension {target_ext.name!r} version available for installation in target is too old, "
                         f"source version: {source_ext.version}, target version: {target_ext.version}"
@@ -1220,7 +1286,7 @@ class PGMigrate:
 
         # PG 13 and older versions do not support `--extension` option.
         # The migration still succeeds with some unharmful error messages in the output.
-        if db and self.source.version >= LooseVersion("14"):
+        if db and self.source.version >= Version("14"):
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         if self.createdb:
@@ -1246,7 +1312,7 @@ class PGMigrate:
 
         # PG 13 and older versions do not support `--extension` option.
         # The migration still succeeds with some unharmful error messages in the output.
-        if self.source.version >= LooseVersion("14"):
+        if self.source.version >= Version("14"):
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         subtask: PGSubTask = self._pg_dump_pipe_psql(
@@ -1256,42 +1322,39 @@ class PGMigrate:
             raise PGDataDumpFailedError(f"Failed to dump data: {subtask!r}")
         return PGMigrateStatus.done
 
-    def _wait_for_replication(self, *, dbname: str, slotname: str, subname: str, check_interval: float = 2.0):
+    def _wait_for_replication(self, *, dbname: str, check_interval: float = 2.0):
         while True:
-            in_sync, write_lsn = self.source.replication_in_sync(
-                dbname=dbname, slotname=slotname, max_replication_lag=self.max_replication_lag
-            )
+            in_sync, write_lsn = self.source.replication_in_sync(dbname=dbname, max_replication_lag=self.max_replication_lag)
             if in_sync and self.target.replication_in_sync(
-                dbname=dbname, subname=subname, write_lsn=write_lsn, max_replication_lag=self.max_replication_lag
+                dbname=dbname, write_lsn=write_lsn, max_replication_lag=self.max_replication_lag
             ):
                 break
             time.sleep(check_interval)
 
     def _db_replication(self, *, db: PGDatabase) -> PGMigrateStatus:
         dbname = db.dbname
-        pubname = slotname = subname = None
         try:
             tables = self.filter_tables(db) or []
-            pubname = self.source.create_publication(dbname=dbname, only_tables=tables)
-            slotname = self.source.create_replication_slot(dbname=dbname)
-            subname = self.target.create_subscription(
-                conn_str=self.source.conn_str(dbname=dbname), pubname=pubname, slotname=slotname, dbname=dbname
-            )
+            self.source.create_publication(dbname=dbname, only_tables=tables)
+            self.source.create_replication_slot(dbname=dbname)
+            self.target.create_subscription(conn_str=self.source.conn_str(dbname=dbname), dbname=dbname)
+
         except psycopg2.ProgrammingError as e:
             self.log.error("Encountered error: %r, cleaning up", e)
-            if subname:
-                self.target.cleanup(dbname=dbname, subname=subname)
-            if pubname and slotname:
-                self.source.cleanup(dbname=dbname, pubname=pubname, slotname=slotname)
+
+            # clean-up replication objects, avoid leaving traces specially in source
+            self.target.cleanup(dbname=dbname)
+            self.source.cleanup(dbname=dbname)
             raise
 
         self.log.info("Logical replication setup successful for database %r", dbname)
         if self.max_replication_lag > -1:
-            self._wait_for_replication(dbname=dbname, slotname=slotname, subname=subname)
+            self._wait_for_replication(dbname=dbname)
         if self.stop_replication:
-            self.target.cleanup(dbname=dbname, subname=subname)
-            self.source.cleanup(dbname=dbname, pubname=pubname, slotname=slotname)
+            self.target.cleanup(dbname=dbname)
+            self.source.cleanup(dbname=dbname)
             return PGMigrateStatus.done
+
         # leaving replication running
         return PGMigrateStatus.running
 

@@ -2,6 +2,7 @@
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult, PGTarget
 from datetime import datetime
+from packaging.version import Version
 from test.utils import modify_pg_security_agent_reserved_roles, PGRunner, random_string
 from typing import Tuple
 
@@ -112,7 +113,12 @@ def test_pg_roles_superusers(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunn
         else:
             assert role["rolname"] == username
             assert role["status"] == "failed"
-            assert role["message"] == "must be superuser to create superusers"
+
+            if Version(target.pgversion) >= Version("16"):
+                privilege_err_message = 'permission denied to create role'
+            else:
+                privilege_err_message = 'must be superuser to create superusers'
+            assert role["message"] == privilege_err_message
             assert not role["rolpassword"]
 
     roles = set(r["rolname"] for r in target.list_roles())
@@ -134,6 +140,12 @@ def test_pg_roles_replication_users(pg_source_and_target: Tuple[PGRunner, PGRunn
         if role["rolname"] in existing_roles:
             assert role["status"] == "exists"
             assert role["message"] == "role already exists"
+        # >= PG16, users with CREATEROLE privilege can create replication users
+        # Prior PG16, only superusers were allowed to
+        elif Version(target.pgversion) >= Version("16"):
+            assert role["rolname"] == username
+            assert role["status"] == "created"
+            assert role["message"] == "role created"
         else:
             assert role["rolname"] == username
             assert role["status"] == "failed"
@@ -141,7 +153,10 @@ def test_pg_roles_replication_users(pg_source_and_target: Tuple[PGRunner, PGRunn
             assert not role["rolpassword"]
 
     roles = set(r["rolname"] for r in target.list_roles())
-    assert username not in roles
+    if Version(target.pgversion) >= Version("16"):
+        assert username in roles
+    else:
+        assert username not in roles
 
 
 def test_pg_roles_as_superuser(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunner]):

@@ -17,9 +17,10 @@ def test_dbs_max_total_size_check(pg_source_and_target: Tuple[PGRunner, PGRunner
         source.create_db(dbname=dbname)
         target.create_db(dbname=dbname)
 
-    # This DB seems to be created outside the tests
-    dbnames.add("postgres")
+    # from >=PG15 there is a restriction non-super users in postgres db
+    # so let's just ignore it
 
+    default_filtered_dbs = ["postgres"]
     # Create few tables and insert some data
     tables = [f'table_{i}' for i in range(4)]
     for dbname in dbnames:
@@ -34,6 +35,7 @@ def test_dbs_max_total_size_check(pg_source_and_target: Tuple[PGRunner, PGRunner
         target_conn_info=target.conn_info(),
         createdb=False,
         verbose=True,
+        filtered_db=",".join(default_filtered_dbs),
     )
 
     with patch(
@@ -63,7 +65,7 @@ def test_dbs_max_total_size_check(pg_source_and_target: Tuple[PGRunner, PGRunner
         target_conn_info=target.conn_info(),
         createdb=False,
         verbose=True,
-        filtered_db=",".join(dbnames),
+        filtered_db=",".join(default_filtered_dbs + list(dbnames)),
     )
 
     with patch(

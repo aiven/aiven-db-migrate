@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from _pytest.fixtures import FixtureRequest
 from _pytest.tmpdir import TempPathFactory
-from aiven_db_migrate.migrate.pgmigrate import PGTarget
+from aiven_db_migrate.migrate.pgmigrate import PGTarget, ReplicationObjectType
 from contextlib import contextmanager
 from copy import copy
-from distutils.version import LooseVersion
 from functools import partial, wraps
+from packaging.version import Version
 from pathlib import Path
 from psycopg2.extras import LogicalReplicationConnection, ReplicationCursor
 from test.utils import PGRunner, SUPPORTED_PG_VERSIONS
@@ -100,7 +100,7 @@ def generate_fixtures():
         source_name = f"{name_prefix}_source"
         inject_pg_fixture(name=source_name, pgversion=source, with_gatekeeper=False)
         for target in pg_target_versions:
-            if LooseVersion(source) > LooseVersion(target):
+            if Version(source) > Version(target):
                 continue
             name_prefix = "pg{}".format(target.replace(".", ""))
             target_name = f"{name_prefix}_target"
@@ -154,8 +154,12 @@ def clean_replication_slots_for_runner(pg_runner: PGRunner) -> Callable[[Callabl
                     break  # Found it, no need to try other databases.
 
         @wraps(function)
-        def wrapper(self: PGTarget, *args, slotname: str, **kwargs) -> R:
-            subname = function(self, *args, slotname=slotname, **kwargs)
+        def wrapper(self: PGTarget, *args, dbname: str, **kwargs) -> R:
+            subname = function(self, *args, dbname=dbname, **kwargs)
+            slotname = self.get_replication_object_name(
+                dbname=dbname,
+                replication_obj_type=ReplicationObjectType.REPLICATION_SLOT,
+            )
 
             pg_runner.cleanups.append(partial(_drop_replication_slot, pg_runner_=pg_runner, slot_name=slotname))
 
