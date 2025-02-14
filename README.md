@@ -92,7 +92,7 @@ Databases:
 ```
 
 By default logical replication is left running and the created pub/sub objects need to be cleaned up once workloads have been
-moved to the new server. Objects created by this tool are named like `managed_db_migrate_<dbname>_<sub|pub|slot>`.
+moved to the new server. Objects created by this tool are named like `aiven_db_migrate_<dbname>_<sub|pub|slot>`.
 
 Starting from the target (using `aiven-extras` extension), get first the subscription name:
 ```
@@ -100,7 +100,7 @@ defaultdb= > SELECT * FROM aiven_extras.pg_list_all_subscriptions();
 ```
 and then drop it:
 ```
-defaultdb= > SELECT * FROM aiven_extras.pg_drop_subscription('managed_db_migrate_defaultdb_sub');
+defaultdb= > SELECT * FROM aiven_extras.pg_drop_subscription('aiven_db_migrate_defaultdb_sub');
 ```
 
 Note that with `aiven-extras` dropping subscription in target also drops replication slot in source (`dblink`).
@@ -111,13 +111,13 @@ defaultdb=> SELECT * FROM pg_publication;
 ```
 and then drop it:
 ```
-defaultdb=> DROP PUBLICATION managed_db_migrate_defaultdb_pub;
+defaultdb=> DROP PUBLICATION aiven_db_migrate_defaultdb_pub;
 ```
 
 In case that `aiven-extras` is not used clean up replication slot too:
 ```
 defaultdb=> SELECT * FROM pg_replication_slots;
-defaultdb=> SELECT * FROM pg_drop_replication_slot('managed_db_migrate_defaultdb_slot');
+defaultdb=> SELECT * FROM pg_drop_replication_slot('aiven_db_migrate_defaultdb_slot');
 ```
 
 Using `--max-replication-lag` waits until replication lag in bytes is less than/equal to given max replication lag. This
