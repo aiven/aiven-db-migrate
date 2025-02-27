@@ -208,8 +208,8 @@ def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], 
         for db in [db_name, other_db_name, "postgres"]:
             try:
                 with target.cursor(username=target.superuser, dbname=db, autocommit=True) as cur:
-                    cur.execute(f"ALTER SUBSCRIPTION managed_db_migrate_{db}_sub DISABLE")
-                    cur.execute(f"DROP SUBSCRIPTION IF EXISTS managed_db_migrate_{db}_sub CASCADE")
+                    cur.execute(f"ALTER SUBSCRIPTION aiven_db_migrate_{db}_sub DISABLE")
+                    cur.execute(f"DROP SUBSCRIPTION IF EXISTS aiven_db_migrate_{db}_sub CASCADE")
             except psycopg2.Error:
                 pass
             try:

@@ -106,7 +106,7 @@ class PGRole:
 
 class PGCluster:
     """PGCluster is a collection of databases managed by a single PostgreSQL server instance"""
-    DB_OBJECT_PREFIX = "managed_db_migrate"
+    DB_OBJECT_PREFIX = "aiven_db_migrate"
     conn_info: Dict[str, Any]
     _databases: Dict[str, PGDatabase]
     _params: Dict[str, str]
