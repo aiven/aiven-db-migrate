@@ -1241,7 +1241,7 @@ class PGMigrate:
 
     def _pg_dump_pipe_psql(self, *, pg_dump_cmd: Sequence[str], target_conn_str: str) -> PGSubTask:
         psql_cmd = [
-            "psql",
+            str(self.pgbin / "psql"),
             "--no-psqlrc",
             "--echo-all" if self.verbose else "--echo-errors",
             # "--variable=ON_ERROR_STOP=1",
