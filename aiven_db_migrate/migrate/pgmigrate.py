@@ -1007,14 +1007,14 @@ class PGMigrate:
 
     def _check_db_versions(self) -> None:
         """Check that the version of the target database is the same or more recent than the source database."""
-        if self.source.version > self.target.version:
+        if self.source.version.major > self.target.version.major:
             if self.skip_db_version_check:
                 self.log.warning(
                     "Migrating to older PostgreSQL server version is not recommended. Source: %s, Target: %s" %
                     (self.source.version, self.target.version)
                 )
             else:
-                raise PGMigrateValidationFailedError("Migrating to older PostgreSQL server version is not supported")
+                raise PGMigrateValidationFailedError("Migrating to older major PostgreSQL server version is not supported")
 
     def _check_databases(self):
         for db in self.source.databases.values():
