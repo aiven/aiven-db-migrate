@@ -97,7 +97,7 @@ class PGRole:
     rolreplication: bool
     rolconnlimit: int
     # placeholder password
-    rolpassword: Optional[str]
+    rolpassword: Optional[str] = field(repr=False)
     rolvaliduntil: Optional[datetime]
     rolbypassrls: bool
     rolconfig: List[str]
@@ -761,7 +761,7 @@ class PGRoleTask:
     message: str
     rolname: str
     status: PGRoleStatus
-    rolpassword: Optional[str] = None
+    rolpassword: Optional[str] = field(repr=False, default=None)
 
     def result(self) -> Dict[str, Optional[str]]:
         return {
@@ -1612,6 +1612,11 @@ def main(args=None, *, prog="pg_migrate"):
         action="store_true",
         help="Skip PG version check between source and target",
     )
+    parser.add_argument(
+        "--show-passwords",
+        action="store_true",
+        help="Show generated placeholder roles passwords in the output, by default passwords are not shown",
+    )
 
     args = parser.parse_args(args)
     log_format = "%(asctime)s\t%(name)s\t%(levelname)s\t%(message)s"
@@ -1653,9 +1658,14 @@ def main(args=None, *, prog="pg_migrate"):
         print()
         print("Roles:")
         for role in result.pg_roles.values():
+            rolpassword = role["rolpassword"]
+            if rolpassword is None:
+                rolpassword = "-"
+            elif not args.show_passwords:
+                rolpassword = "<hidden>"
             print(
                 "  rolname: {!r}, rolpassword: {!r}, status: {!r}, message: {!r}".format(
-                    role["rolname"], role["rolpassword"], role["status"], role["message"]
+                    role["rolname"], rolpassword, role["status"], role["message"]
                 )
             )
         print()
