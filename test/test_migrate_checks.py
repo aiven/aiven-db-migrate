@@ -6,6 +6,7 @@ from test.utils import PGRunner, random_string
 from typing import Tuple
 from unittest.mock import MagicMock, patch
 
+import aiven_db_migrate.migrate.pgmigrate
 import pytest
 
 
@@ -130,7 +131,7 @@ def test_large_object_warnings(pg_source_and_target: Tuple[PGRunner, PGRunner]):
         verbose=True,
     )
 
-    pg_mig.log = MagicMock()
+    aiven_db_migrate.migrate.pgmigrate.logger = MagicMock()
 
     # Create a large object in the source
     with source.cursor(dbname=source.defaultdb) as cur:
@@ -141,6 +142,6 @@ def test_large_object_warnings(pg_source_and_target: Tuple[PGRunner, PGRunner]):
     ) as mock_lobs_check:
         pg_mig.validate()
         mock_lobs_check.assert_called_once()
-        pg_mig.log.warning.assert_called_with(
+        aiven_db_migrate.migrate.pgmigrate.logger.warning.assert_called_with(
             "Large objects detected: large objects are not compatible with logical replication: https://www.postgresql.org/docs/14/logical-replication-restrictions.html"
         )
