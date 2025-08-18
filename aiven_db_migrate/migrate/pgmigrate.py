@@ -26,6 +26,7 @@ import psycopg2.errorcodes
 import psycopg2.extensions
 import psycopg2.extras
 import random
+import re
 import string
 import subprocess
 import sys
@@ -978,7 +979,7 @@ class PGMigrate:
 
         if not self.replicate_extensions:
             ret = {t for t in ret if t.extension_name is None}
-        # -t <table_name> + connection params and other pg_dump / psql params
+        # -t <table_name> + connection params and other pg_dump / pg_restore params
         total_table_len = sum(4 + len(str(t)) for t in ret)
         if total_table_len + 200 > MAX_CLI_LEN:
             raise ValueError("Table count exceeding safety limit")
@@ -1242,26 +1243,35 @@ class PGMigrate:
         except UnicodeDecodeError:
             return line.decode("iso-8859-1")
 
-    def _pg_dump_pipe_psql(self, *, pg_dump_cmd: Sequence[str], target_conn_str: str) -> PGSubTask:
-        psql_cmd = [
-            str(self.pgbin / "psql"),
-            "--no-psqlrc",
-            "--echo-all" if self.verbose else "--echo-errors",
-            # "--variable=ON_ERROR_STOP=1",
+    def _pg_dump_pipe_pg_restore(self, *, pg_dump_cmd: Sequence[str], target_conn_str: str, createdb: bool) -> PGSubTask:
+        pg_restore_cmd = [
+            str(self.pgbin / "pg_restore"),
+            "-d",
             target_conn_str,
         ]
+        if self.verbose:
+            pg_restore_cmd.append("--verbose")
+        if createdb:
+            pg_restore_cmd.append("--create")
         # https://docs.python.org/3.7/library/subprocess.html#replacing-shell-pipeline
         pg_dump = subprocess.Popen(pg_dump_cmd, stdout=subprocess.PIPE)
-        psql = subprocess.Popen(psql_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE)
-        # allow pg_dump to receive a SIGPIPE if psql exists
+        pg_restore = subprocess.Popen(pg_restore_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # allow pg_dump to receive a SIGPIPE if pg_restore exists
         pg_dump.stdout.close()
-        stdout, stderr = psql.communicate()
+
+        stdout, stderr = pg_restore.communicate()
         if self.verbose:
             for line in stdout.split(b"\n") if stdout else []:
                 print(self._decode_output_line(line))
+        final_error_count_re = re.compile("errors ignored on restore:")
+        saw_final_error_count = False
         for line in stderr.split(b"\n") if stderr else []:
-            self.log.warning(self._decode_output_line(line))
-        return PGSubTask(pid=psql.pid, returncode=psql.returncode, stdout=stdout, stderr=stderr)
+            decoded_line = self._decode_output_line(line)
+            self.log.warning(decoded_line)
+            if final_error_count_re.search(decoded_line):
+                saw_final_error_count = True
+        return_code = 0 if saw_final_error_count else pg_restore.returncode
+        return PGSubTask(pid=pg_restore.pid, returncode=return_code, stdout=stdout, stderr=stderr)
 
     def _dump_schema(
         self,
@@ -1284,6 +1294,7 @@ class PGMigrate:
             # Skip COMMENT statements as they require superuser (--no-comments is available in pg 11).
             # "--no-comments",
             "--schema-only",
+            "-Fc",
             self.source.conn_str(dbname=dbname),
         ]
 
@@ -1293,11 +1304,10 @@ class PGMigrate:
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         if self.createdb:
-            pg_dump_cmd.insert(-1, "--create")
-            # db is created and connected
             dbname = None
-        subtask: PGSubTask = self._pg_dump_pipe_psql(
-            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname)
+        subtask: PGSubTask = self._pg_dump_pipe_pg_restore(
+            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname),
+            createdb=self.createdb
         )
         if subtask.returncode != 0:
             raise PGSchemaDumpFailedError(f"Failed to dump schema: {subtask!r}")
@@ -1307,6 +1317,7 @@ class PGMigrate:
         self.log.info("Dumping data from database %r", dbname)
         pg_dump_cmd = [
             str(self.pgbin / "pg_dump"),
+            "-Fc",
             "--data-only",
             self.source.conn_str(dbname=dbname),
         ]
@@ -1318,8 +1329,9 @@ class PGMigrate:
         if self.source.version >= Version("14"):
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
-        subtask: PGSubTask = self._pg_dump_pipe_psql(
-            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname)
+        subtask: PGSubTask = self._pg_dump_pipe_pg_restore(
+            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname),
+            createdb=False
         )
         if subtask.returncode != 0:
             raise PGDataDumpFailedError(f"Failed to dump data: {subtask!r}")
