@@ -172,7 +172,10 @@ class PGCluster:
         try:
             conn = psycopg2.connect(**conn_info, async_=True)
             wait_select(conn, self.connect_timeout())
-            yield conn.cursor(cursor_factory=RealDictCursor)
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute("SET search_path='';")
+            wait_select(cursor.connection)
+            yield cursor
         finally:
             if conn is not None:
                 with suppress(Exception):
