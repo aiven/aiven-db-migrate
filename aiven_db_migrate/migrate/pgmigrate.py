@@ -1306,8 +1306,7 @@ class PGMigrate:
         if self.createdb:
             dbname = None
         subtask: PGSubTask = self._pg_dump_pipe_pg_restore(
-            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname),
-            createdb=self.createdb
+            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname), createdb=self.createdb
         )
         if subtask.returncode != 0:
             raise PGSchemaDumpFailedError(f"Failed to dump schema: {subtask!r}")
@@ -1330,8 +1329,7 @@ class PGMigrate:
             pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
 
         subtask: PGSubTask = self._pg_dump_pipe_pg_restore(
-            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname),
-            createdb=False
+            pg_dump_cmd=pg_dump_cmd, target_conn_str=self.target.conn_str(dbname=dbname), createdb=False
         )
         if subtask.returncode != 0:
             raise PGDataDumpFailedError(f"Failed to dump data: {subtask!r}")

@@ -29,8 +29,8 @@ def test_extension_table_filtering(
         replicate_extensions=with_extension,
     )
     for t in tables:
-        pg_mig.source.c(f"CREATE TABLE {t} (foo int)", return_rows=0, dbname=db_name)
-    pg_mig.source.c("CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=db_name)
+        pg_mig.source.c(f"CREATE TABLE public.{t} (foo int)", return_rows=0, dbname=db_name)
+    pg_mig.source.c("CREATE EXTENSION postgis WITH SCHEMA public CASCADE", return_rows=0, dbname=db_name)
     # pylint: disable=protected-access
     pg_mig.source._set_db(dbname=db_name)
     # pylint: enable=protected-access
@@ -57,8 +57,8 @@ def test_extension_table_filtering(
         replicate_extensions=with_extension,
     )
     for t in tables:
-        pg_mig.source.c(f"CREATE TABLE {t} (foo int)", return_rows=0, dbname=other_db_name)
-    pg_mig.source.c("CREATE EXTENSION postgis CASCADE", return_rows=0, dbname=other_db_name)
+        pg_mig.source.c(f"CREATE TABLE public.{t} (foo int)", return_rows=0, dbname=other_db_name)
+    pg_mig.source.c("CREATE EXTENSION postgis WITH SCHEMA public CASCADE", return_rows=0, dbname=other_db_name)
     # pylint: disable=protected-access
     pg_mig.source._set_db(dbname=other_db_name)
     # pylint: enable=protected-access
@@ -111,7 +111,7 @@ def test_table_filtering(
         if with_schema:
             pg_mig.source.c(f"CREATE TABLE {schema_name}.{t} (foo int)", return_rows=0, dbname=db_name)
         else:
-            pg_mig.source.c(f"CREATE TABLE {t} (foo int)", return_rows=0, dbname=db_name)
+            pg_mig.source.c(f"CREATE TABLE public.{t} (foo int)", return_rows=0, dbname=db_name)
     # pylint: disable=protected-access
     pg_mig.source._set_db(dbname=db_name)
     other_db = None
@@ -158,8 +158,8 @@ def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], 
     for db in [db_name, other_db_name]:
         with source.cursor(dbname=db) as c:
             for t in table_names:
-                c.execute(f"CREATE TABLE {t} (foo INT)")
-                c.execute(f"INSERT INTO {t} (foo) VALUES (1), (2), (3)")
+                c.execute(f"CREATE TABLE public.{t} (foo INT)")
+                c.execute(f"INSERT INTO public.{t} (foo) VALUES (1), (2), (3)")
 
     only_tables = [
         f'{db_name}.public."ta .\'ble0"',
@@ -195,13 +195,13 @@ def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], 
                 for t in tables:
                     if t in matched_tables[db]:
                         continue
-                    count = pg_mig.target.c(f"SELECT COUNT(1) FROM {t}", dbname=db)[0]
+                    count = pg_mig.target.c(f"SELECT COUNT(1) FROM public.{t}", dbname=db)[0]
                     if count["count"] == 3:
                         matched_tables[db].add(t)
         desired = {other_db_name: {'"ta .\'ble0"', '"ta .\'ble1"'}, db_name: {'"ta .\'ble2"'}}
         for db, tables in desired.items():
             for t in tables:
-                count = pg_mig.target.c(f"SELECT COUNT(1) FROM {t}", dbname=db)[0]
+                count = pg_mig.target.c(f"SELECT COUNT(1) FROM public.{t}", dbname=db)[0]
                 assert count["count"] == 0, count
 
     finally:
