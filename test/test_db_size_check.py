@@ -22,7 +22,7 @@ def test_db_size(pg_source_and_target: Tuple[PGRunner, PGRunner]):
     )
 
     # Create few tables and insert some data
-    tables = [f'table_{i}' for i in range(4)]
+    tables = [f'public.table_{i}' for i in range(4)]
     for dbname in {db_name, other_db_name}:
         with source.cursor(dbname=dbname) as c:
             for t in tables:

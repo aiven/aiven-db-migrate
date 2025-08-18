@@ -44,5 +44,5 @@ def test_dump(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
         dbname=dbname
     )
     assert exists
-    count = pg_mig.target.c(f"SELECT count(*) FROM {tblname}", dbname=dbname, return_rows=1)[0]
+    count = pg_mig.target.c(f"SELECT count(*) FROM public.{tblname}", dbname=dbname, return_rows=1)[0]
     assert int(count["count"]) == 5

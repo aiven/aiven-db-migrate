@@ -22,12 +22,12 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
 
     # create table with some data in source db
     with source.cursor(dbname=dbname) as cur:
-        cur.execute(f"CREATE TABLE {tblname} (something INT)")
-        cur.execute(f"INSERT INTO {tblname} VALUES (1), (2)")
+        cur.execute(f"CREATE TABLE public.{tblname} (something INT)")
+        cur.execute(f"INSERT INTO public.{tblname} VALUES (1), (2)")
 
     # create table in target
     with target.cursor(dbname=dbname) as cur:
-        cur.execute(f"CREATE TABLE {tblname} (something INT)")
+        cur.execute(f"CREATE TABLE public.{tblname} (something INT)")
 
     if aiven_extras:
         # have aiven-extras in both source and target
@@ -63,7 +63,7 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
     assert pubname in sub["subpublications"]
 
     # have some more data in source
-    pg_source.c(f"INSERT INTO {tblname} VALUES (3), (4), (5)", dbname=dbname, return_rows=0)
+    pg_source.c(f"INSERT INTO public.{tblname} VALUES (3), (4), (5)", dbname=dbname, return_rows=0)
 
     # wait until replication is in sync
     timer = Timer(timeout=10, what="replication in sync")
@@ -75,7 +75,7 @@ def test_replication(pg_source_and_target: Tuple[PGRunner, PGRunner], aiven_extr
     # verify that all data has been replicated
     timer = Timer(timeout=10, what="all data replicated")
     while timer.loop():
-        count = pg_target.c(f"SELECT count(*) FROM {tblname}", dbname=dbname, return_rows=1)[0]
+        count = pg_target.c(f"SELECT count(*) FROM public.{tblname}", dbname=dbname, return_rows=1)[0]
         if int(count["count"]) == 5:
             break
 
