@@ -1,5 +1,5 @@
 # Copyright (c) 2021 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate.pgmigrate import PGCluster
+from aiven_db_migrate.migrate.clusters import PGCluster
 from multiprocessing import Process
 from packaging.version import Version
 from test.utils import PGRunner

@@ -1,7 +1,9 @@
 # Copyright (c) 2021 Aiven, Helsinki, Finland. https://aiven.io/
 
 from aiven_db_migrate.migrate import errors
-from aiven_db_migrate.migrate.pgmigrate import main, PGCluster, PGDatabase, PGMigrate, PGMigrateMethod, PGMigrateTask
+from aiven_db_migrate.migrate.clusters import PGCluster
+from aiven_db_migrate.migrate.models import PGDatabase, PGMigrateMethod, PGMigrateTask
+from aiven_db_migrate.migrate.pgmigrate import main, PGMigrate
 from contextlib import nullcontext as does_not_raise
 from unittest import mock
 

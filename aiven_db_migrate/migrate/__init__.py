@@ -1,3 +1,4 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from .pgmigrate import PGMigrate, PGMigrateResult  # noqa
+from .models import PGMigrateResult
+from .pgmigrate import PGMigrate  # noqa

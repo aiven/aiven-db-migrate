@@ -1,6 +1,8 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
+from aiven_db_migrate.migrate import PGMigrateResult
+from aiven_db_migrate.migrate.clusters import PGTarget
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
-from aiven_db_migrate.migrate.pgmigrate import PGMigrate, PGMigrateResult, PGTarget
+from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from datetime import datetime
 from packaging.version import Version
 from test.utils import modify_pg_security_agent_reserved_roles, PGRunner, random_string

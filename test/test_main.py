@@ -1,5 +1,6 @@
 # Copyright (c) 2021 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate.pgmigrate import main, PGCluster, PGMigrate
+from aiven_db_migrate.migrate.clusters import PGCluster
+from aiven_db_migrate.migrate.pgmigrate import main, PGMigrate
 from unittest import mock
 
 import pytest
