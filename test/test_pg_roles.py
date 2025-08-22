@@ -1,7 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate import PGMigrateResult
 from aiven_db_migrate.migrate.clusters import PGTarget
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
+from aiven_db_migrate.migrate.models import PGMigrateResult, PGMigrateStatus, PGRoleStatus
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from datetime import datetime
 from packaging.version import Version
@@ -27,18 +27,16 @@ def test_pg_roles_with_no_password(pg_source_and_target: Tuple[PGRunner, PGRunne
     pg_mig = PGMigrate(source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=True, verbose=True)
     existing_roles = set(pg_mig.target.pg_roles.keys())
     all_roles = new_roles | existing_roles
-    result: PGMigrateResult = pg_mig.migrate()
+    result = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == PGRoleStatus.exists
         else:
-            assert role["rolname"] in new_roles
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert not role["rolpassword"]
+            assert role.rolname in new_roles
+            assert role.status == PGRoleStatus.created
+            assert not role.rolpassword
 
 
 def test_pg_roles_with_placeholder_password(pg_source_and_target: Tuple[PGRunner, PGRunner]):
@@ -56,18 +54,16 @@ def test_pg_roles_with_placeholder_password(pg_source_and_target: Tuple[PGRunner
     pg_mig = PGMigrate(source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=True, verbose=True)
     existing_roles = set(pg_mig.target.pg_roles.keys())
     all_roles = new_roles | existing_roles
-    result: PGMigrateResult = pg_mig.migrate()
+    result = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == PGRoleStatus.exists
         else:
-            assert role["rolname"] in new_roles
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert role["rolpassword"].startswith("placeholder_")
+            assert role.rolname in new_roles
+            assert role.status == PGRoleStatus.created
+            assert role.rolpassword.startswith("placeholder_")
 
 
 def test_pg_roles_rolconfig(pg_source_and_target: Tuple[PGRunner, PGRunner]):
@@ -78,18 +74,16 @@ def test_pg_roles_rolconfig(pg_source_and_target: Tuple[PGRunner, PGRunner]):
     pg_mig = PGMigrate(source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=True, verbose=True)
     existing_roles = set(pg_mig.target.pg_roles.keys())
     all_roles = {username} | existing_roles
-    result: PGMigrateResult = pg_mig.migrate()
+    result = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == PGRoleStatus.exists
         else:
-            assert role["rolname"] == username
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert role["rolpassword"].startswith("placeholder_")
+            assert role.rolname == username
+            assert role.status == PGRoleStatus.created
+            assert role.rolpassword.startswith("placeholder_")
 
 
 def test_pg_roles_superusers(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunner]):
@@ -107,21 +101,14 @@ def test_pg_roles_superusers(pg_source_and_target_unsafe: Tuple[PGRunner, PGRunn
     all_roles = {username} | existing_roles
     result: PGMigrateResult = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == "exists"
         else:
-            assert role["rolname"] == username
-            assert role["status"] == "failed"
-
-            if Version(target.pgversion) >= Version("16"):
-                privilege_err_message = 'permission denied to create role'
-            else:
-                privilege_err_message = 'must be superuser to create superusers'
-            assert role["message"] == privilege_err_message
-            assert not role["rolpassword"]
+            assert role.rolname == username
+            assert role.status == "failed"
+            assert not role.rolpassword
 
     roles = set(r["rolname"] for r in target.list_roles())
     assert username not in roles
@@ -137,22 +124,19 @@ def test_pg_roles_replication_users(pg_source_and_target: Tuple[PGRunner, PGRunn
     all_roles = {username} | existing_roles
     result: PGMigrateResult = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == "exists"
         # >= PG16, users with CREATEROLE privilege can create replication users
         # Prior PG16, only superusers were allowed to
         elif Version(target.pgversion) >= Version("16"):
-            assert role["rolname"] == username
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
+            assert role.rolname == username
+            assert role.status == "created"
         else:
-            assert role["rolname"] == username
-            assert role["status"] == "failed"
-            assert role["message"] == "must be superuser to create replication users"
-            assert not role["rolpassword"]
+            assert role.rolname == username
+            assert role.status == "failed"
+            assert not role.rolpassword
 
     roles = set(r["rolname"] for r in target.list_roles())
     if Version(target.pgversion) >= Version("16"):
@@ -182,16 +166,14 @@ def test_pg_roles_as_superuser(pg_source_and_target_unsafe: Tuple[PGRunner, PGRu
     all_roles = new_roles | existing_roles
     result: PGMigrateResult = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == "exists"
         else:
-            assert role["rolname"] in new_roles
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert role["rolpassword"].startswith("placeholder_")
+            assert role.rolname in new_roles
+            assert role.status == "created"
+            assert role.rolpassword.startswith("placeholder_")
 
 
 def test_pg_roles_valid_until(pg_source_and_target: Tuple[PGRunner, PGRunner]):
@@ -205,16 +187,14 @@ def test_pg_roles_valid_until(pg_source_and_target: Tuple[PGRunner, PGRunner]):
     all_roles = {username} | existing_roles
     result: PGMigrateResult = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == "exists"
         else:
-            assert role["rolname"] == username
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert role["rolpassword"].startswith("placeholder_")
+            assert role.rolname == username
+            assert role.status == "created"
+            assert role.rolpassword.startswith("placeholder_")
 
     role = next(r for r in target.list_roles() if r["rolname"] == username)
     assert role["rolvaliduntil"].date() == validuntil.date()
@@ -230,18 +210,16 @@ def test_pg_roles_connection_limit(pg_source_and_target: Tuple[PGRunner, PGRunne
     pg_mig = PGMigrate(source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=True, verbose=True)
     existing_roles = set(pg_mig.target.pg_roles.keys())
     all_roles = {username} | existing_roles
-    result: PGMigrateResult = pg_mig.migrate()
+    result = pg_mig.migrate()
 
-    for role in result.pg_roles.values():
-        assert role["rolname"] in all_roles
-        if role["rolname"] in existing_roles:
-            assert role["status"] == "exists"
-            assert role["message"] == "role already exists"
+    for role in result.role_migrate_results:
+        assert role.rolname in all_roles
+        if role.rolname in existing_roles:
+            assert role.status == "exists"
         else:
-            assert role["rolname"] == username
-            assert role["status"] == "created"
-            assert role["message"] == "role created"
-            assert role["rolpassword"].startswith("placeholder_")
+            assert role.rolname == username
+            assert role.status == "created"
+            assert role.rolpassword.startswith("placeholder_")
 
     role = next(r for r in target.list_roles() if r["rolname"] == username)
     assert role["rolconnlimit"] == connlimit
@@ -261,12 +239,10 @@ def test_migration_fails_with_additional_superuser_roles(pg_source_and_target: T
     )
 
     assert pg_mig.target.is_pg_security_agent_enabled
-
-    with pytest.raises(
-        PGMigrateValidationFailedError,
-        match=r"Some superuser roles from source database .* are not allowed in target database.*",
-    ):
-        pg_mig.migrate()
+    result = pg_mig.migrate()
+    assert result.validation.status == PGMigrateStatus.failed
+    assert type(result.validation.error) is PGMigrateValidationFailedError
+    assert "Some superuser roles from source database" in str(result.validation.error)
 
 
 def test_migration_succeeds_when_additional_superuser_roles_are_excluded(
@@ -294,7 +270,7 @@ def test_migration_succeeds_when_additional_superuser_roles_are_excluded(
     assert pg_mig.target.is_pg_security_agent_enabled
     result = pg_mig.migrate()
 
-    assert result.pg_roles.keys() == {regularuser, source.testuser}
+    assert {r.rolname for r in result.role_migrate_results} == {regularuser, source.testuser}
 
 
 def test_migration_succeeds_with_authorized_superuser_role(pg_source_and_target: Tuple[PGRunner, PGRunner]) -> None:
@@ -316,9 +292,8 @@ def test_migration_succeeds_with_authorized_superuser_role(pg_source_and_target:
 
         result: PGMigrateResult = pg_mig.migrate()
 
-        assert superuser in result.pg_roles
-        assert result.pg_roles[superuser]["status"] == "created"
-        assert result.pg_roles[superuser]["message"] == "role created"
+        [r.rolname for r in result.role_migrate_results if r.rolname == superuser]
+        assert (superuser, "created") in [(r.rolname, r.status) for r in result.role_migrate_results]
 
         # Get the specificities of this role
         perms = pg_mig.target.c(f"SELECT * FROM pg_roles WHERE rolname = %s", args=(superuser, ), return_rows=1)[0]

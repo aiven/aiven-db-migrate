@@ -41,24 +41,22 @@ class PGCluster:
         conn_info: Union[str, Dict[str, Any]],
         filtered_db: Optional[str] = None,
         excluded_roles: Optional[str] = None,
-        excluded_extensions: Optional[str] = None,
         mangle: bool = False,
     ):
         self.log = logging.getLogger(self.__class__.__name__)
         self.conn_info = get_connection_info(conn_info)
         self.conn_lock = threading.RLock()
         self.db_lock = threading.Lock()
-        self._databases = dict()
-        self._params = dict()
+        self._databases = {}
+        self._params = {}
         self._version = None
         self._attributes = None
         self._pg_ext = None
         self._pg_ext_whitelist = None
         self._pg_lang = None
-        self._pg_roles = dict()
+        self._pg_roles = {}
         self.filtered_db = filtered_db.split(",") if filtered_db else []
         self.excluded_roles = excluded_roles.split(",") if excluded_roles else []
-        self.excluded_extensions = excluded_extensions.split(",") if excluded_extensions else []
         if "application_name" not in self.conn_info:
             self.conn_info["application_name"] = f"aiven-db-migrate/{__version__}"
         self._mangle = mangle
@@ -121,7 +119,7 @@ class PGCluster:
             if return_rows:
                 results = cur.fetchall()
         if return_rows > 0 and len(results) != return_rows:
-            error = "expected {} rows, got {}".format(return_rows, len(results))
+            error = f"expected {return_rows} rows, got {len(results)}"
             self.log.error(error)
             if len(results) < return_rows:
                 raise PGDataNotFoundError(error)
@@ -154,7 +152,7 @@ class PGCluster:
             try:
                 self.c("CREATE EXTENSION aiven_extras CASCADE", dbname=dbname)
             except (psycopg2.ProgrammingError, psycopg2.NotSupportedError) as e:
-                self.log.info(e)
+                self.log.info("Failed to create aiven_extras extension in %r: %r", dbname, e)
         try:
             exts = self.c("SELECT extname as name, extversion as version FROM pg_catalog.pg_extension", dbname=dbname)
             pg_ext = [PGExtension(name=e["name"], version=e["version"]) for e in exts]
@@ -187,11 +185,11 @@ class PGCluster:
                     )
                 )
             self._databases[dbname] = PGDatabase(
-                dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras, tables=tables
+                dbname=dbname, pg_ext=pg_ext, has_aiven_extras=has_aiven_extras, tables=list(tables)
             )
         except psycopg2.OperationalError as err:
             self.log.warning("Couldn't connect to database %r: %r", dbname, err)
-            self._databases[dbname] = PGDatabase(dbname=dbname, error=err, tables=set())
+            self._databases[dbname] = PGDatabase(dbname=dbname, error=err, tables=[])
         return []
 
     @property
@@ -240,7 +238,7 @@ class PGCluster:
             except psycopg2.ProgrammingError as err:
                 if "unrecognized configuration parameter" not in str(err):
                     raise
-                self._pg_ext_whitelist = list()
+                self._pg_ext_whitelist = []
             else:
                 self._pg_ext_whitelist = [e.strip() for e in wlist["extwlist.extensions"].split(",")]
         return self._pg_ext_whitelist
@@ -262,10 +260,8 @@ class PGCluster:
             for r in roles:
                 rolname = r["rolname"]
                 # create semi-random placeholder password for role with login
-                rolpassword = (
-                    "placeholder_{}".format("".join(random.choices(string.ascii_lowercase, k=16)))
-                    if r["rolcanlogin"] else None
-                )
+                pwd_suffix = "".join(random.choices(string.ascii_lowercase, k=16))
+                rolpassword = f"placeholder_{pwd_suffix}" if r["rolcanlogin"] else None
                 self._pg_roles[rolname] = PGRole(
                     rolname=rolname,
                     rolsuper=r["rolsuper"],
@@ -282,10 +278,6 @@ class PGCluster:
                     safe_rolname=r["safe_rolname"]
                 )
         return self._pg_roles
-
-    @property
-    def replication_available(self) -> bool:
-        return self.version >= Version("10")
 
     @property
     def replication_slots_count(self) -> int:
@@ -331,8 +323,9 @@ class PGCluster:
             return False
 
         result = self.c("SELECT name, setting FROM pg_settings WHERE name = 'aiven.pg_security_agent'")
-
-        return result and result[0]["setting"] == "on"
+        if result:
+            return result[0]["setting"] == "on"
+        return False
 
     def get_security_agent_reserved_roles(self) -> List[str]:
         """Get list of roles that are reserved through Aiven's ``pg_security_agent``."""
@@ -543,7 +536,7 @@ class PGSource(PGCluster):
                 delete_query = f"DROP PUBLICATION {rep_obj_name};"
                 args = None
             elif replication_object_type is ReplicationObjectType.REPLICATION_SLOT:
-                delete_query = f"SELECT 1 FROM pg_catalog.pg_drop_replication_slot(%s)"
+                delete_query = "SELECT 1 FROM pg_catalog.pg_drop_replication_slot(%s)"
                 args = (rep_obj_name, )
             else:
                 # cleanup only handles publications and replication slots in source.
@@ -558,7 +551,7 @@ class PGSource(PGCluster):
             self.c(delete_query, args=args, dbname=dbname, return_rows=0)
         except Exception as exc:
             self.log.error(
-                "Failed to drop %r %r for database %r: %s",
+                "Failed to drop %r %r for database %r: %r",
                 rep_obj_type_display_name,
                 rep_obj_name,
                 dbname,
@@ -653,7 +646,9 @@ class PGTarget(PGCluster):
             self.log.info("Dropping subscription %r from database %r", subname, dbname)
             if self.has_aiven_extras(dbname=dbname):
                 # NOTE: this drops also replication slot from source
-                self.c("SELECT * FROM aiven_extras.pg_drop_subscription(%s)", args=(subname, ), dbname=dbname, return_rows=0)
+                self.c(
+                    "SELECT * FROM aiven_extras.pg_drop_subscription(%s)", args=(subname, ), dbname=dbname, return_rows=0
+                )
             else:
                 # requires superuser or superuser-like privileges, such as "rds_replication" role in AWS RDS
                 self.c("ALTER SUBSCRIPTION {} DISABLE".format(subname), dbname=dbname, return_rows=0)
@@ -662,7 +657,7 @@ class PGTarget(PGCluster):
 
         except Exception as exc:
             self.log.error(
-                "Failed to drop subscription %r for database %r: %s",
+                "Failed to drop subscription %r for database %r: %r",
                 subname,
                 dbname,
                 exc,

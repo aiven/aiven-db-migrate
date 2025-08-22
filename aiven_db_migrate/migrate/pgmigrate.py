@@ -1,29 +1,21 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate import PGMigrateResult
 from aiven_db_migrate.migrate.clusters import PGSource, PGTarget
-from aiven_db_migrate.migrate.errors import PGDataDumpFailedError, PGMigrateValidationFailedError, PGSchemaDumpFailedError
+from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
 from aiven_db_migrate.migrate.models import (
-    PGDatabase, PgDumpStatus, PgDumpTask, PgDumpType, PGExtension, PGMigrateMethod, PGMigrateStatus, PGMigrateTask, PGRole,
-    PGRoleStatus, PGRoleTask, PGTable
+    DBMigrateResult, DumpTaskResult, DumpType, PGDatabase, PGExtension, PGMigrateMethod, PGMigrateResult, PGMigrateStatus,
+    PGRoleStatus, PGTable, ReplicationSetupResult, RoleMigrateTask, ValidationResult
 )
-from aiven_db_migrate.migrate.pgutils import find_pgbin_dir
-from collections import deque
+from aiven_db_migrate.migrate.pgutils import build_pg_dump_cmd, build_pg_restore_cmd, find_pgbin_dir, run_pg_dump_pg_restore
 from concurrent import futures
 from packaging.version import Version
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 import logging
-import os
 import psycopg2
 import psycopg2.errorcodes
 import psycopg2.extensions
 import psycopg2.extras
-import random
-import string
-import subprocess
-import sys
-import threading
 import time
 
 logger = logging.getLogger("PGMigrate")
@@ -32,16 +24,6 @@ MAX_CLI_LEN = 2097152  # getconf ARG_MAX
 
 class PGMigrate:
     """PostgreSQL migrator"""
-    source: PGSource
-    target: PGTarget
-    pgbin: Path
-    createdb: bool
-    max_workers: int
-    max_replication_lag: int
-    stop_replication: bool
-    verbose: bool
-    mangle: bool
-
     def __init__(
         self,
         *,
@@ -49,7 +31,7 @@ class PGMigrate:
         target_conn_info: Union[str, Dict[str, Any]],
         pgbin: Optional[str] = None,
         createdb: bool = True,
-        max_workers: int = 4,
+        max_workers: int = 2,
         max_replication_lag: int = -1,
         stop_replication: bool = False,
         verbose: bool = False,
@@ -61,29 +43,26 @@ class PGMigrate:
         with_tables: Optional[List[str]] = None,
         replicate_extensions: bool = True,
         skip_db_version_check: bool = False,
+        migrate_method: PGMigrateMethod = PGMigrateMethod.replication_with_dump_fallback,
     ):
         if skip_tables and with_tables:
-            raise Exception("Can only specify a skip table list or a with table list")
+            raise ValueError("Can only specify a skip table list or a with table list")
+        self.excluded_extensions = set(excluded_extensions.split(",")) if excluded_extensions else None
         self.source = PGSource(
             conn_info=source_conn_info,
             filtered_db=filtered_db,
             excluded_roles=excluded_roles,
-            excluded_extensions=excluded_extensions,
             mangle=mangle,
         )
         self.target = PGTarget(
             conn_info=target_conn_info,
             filtered_db=filtered_db,
             excluded_roles=excluded_roles,
-            excluded_extensions=excluded_extensions,
             mangle=mangle,
         )
         self.skip_tables = self._convert_table_names(skip_tables)
         self.with_tables = self._convert_table_names(with_tables)
-        if pgbin is None:
-            self.pgbin = pgbin
-        else:
-            self.pgbin = Path(pgbin)
+        self.pgbin = Path(pgbin) if pgbin else None
         # include commands to create db in pg_dump output
         self.createdb = createdb
         # TODO: have "--max-workers" in CLI
@@ -94,6 +73,7 @@ class PGMigrate:
         self.mangle = mangle
         self.replicate_extensions = replicate_extensions
         self.skip_db_version_check = skip_db_version_check
+        self.migrate_method = migrate_method
 
     def _convert_table_names(self, tables: Optional[List[str]]) -> Set[PGTable]:
         ret: Set[PGTable] = set()
@@ -129,13 +109,13 @@ class PGMigrate:
             return None
         if not db.tables:
             return []
-        ret: Set[PGTable] = set()
+        ret = set()
         if self.skip_tables:
             # the db tables should be properly populated on all 3 fields, so we can consider one of the user passed ones
             # to be equivalent the table name is the same AND the schema name is missing or the same AND the
             # db name is missing or the same
             for t in db.tables:
-                found: Optional[PGTable] = None
+                found = None
                 for s in self.skip_tables:
                     # we can add it if the table name differs or the schema name differs or the db name differs
                     if (
@@ -181,12 +161,15 @@ class PGMigrate:
             quoted.append(name)
         return quoted
 
-    def filter_extensions(self, db: PGDatabase) -> Optional[List[str]]:
+    def get_extensions_to_migrate(self, dbname: str) -> list[str] | None:
         """
         Given a database, return installed extensions on the source without
         the ones that have explicitly been excluded from the migration.
         """
-        return [e.name for e in self.source.databases[db.dbname].pg_ext if e.name not in self.target.excluded_extensions]
+        if self.source.version < Version("14") or not self.excluded_extensions:
+            # None means no filtering, migrate all
+            return None
+        return [e.name for e in self.source.databases[dbname].pg_ext if e.name not in self.excluded_extensions]
 
     def _check_different_servers(self) -> None:
         """Check if source and target are different servers."""
@@ -197,14 +180,14 @@ class PGMigrate:
 
     def _check_db_versions(self) -> None:
         """Check that the version of the target database is the same or more recent than the source database."""
+        if self.skip_db_version_check:
+            return
+        if self.source.version < Version("12"):
+            raise PGMigrateValidationFailedError("Source PostgreSQL version must be 12 or newer")
+        if self.target.version < Version("12"):
+            raise PGMigrateValidationFailedError("Target PostgreSQL version must be 12 or newer")
         if self.source.version.major > self.target.version.major:
-            if self.skip_db_version_check:
-                logger.warning(
-                    "Migrating to older PostgreSQL server version is not recommended. Source: %s, Target: %s" %
-                    (self.source.version, self.target.version)
-                )
-            else:
-                raise PGMigrateValidationFailedError("Migrating to older major PostgreSQL server version is not supported")
+            raise PGMigrateValidationFailedError("Migrating to older major PostgreSQL server version is not supported")
 
     def _check_databases(self):
         for db in self.source.databases.values():
@@ -229,7 +212,7 @@ class PGMigrate:
         for dbname, source_db in self.source.databases.items():
             only_tables = self.filter_tables(db=source_db)
             db_size = self.source.get_size(dbname=dbname, only_tables=only_tables)
-            dbs_size += db_size
+            dbs_size += db_size  # type: ignore[assignment]
         if dbs_size > max_size:
             raise PGMigrateValidationFailedError(
                 f"Databases do not fit to the required maximum size ({dbs_size} > {max_size})"
@@ -240,7 +223,8 @@ class PGMigrate:
         target_lang = {lan["lanname"] for lan in self.target.pg_lang}
         missing = source_lang - target_lang
         if missing:
-            raise PGMigrateValidationFailedError("Languages not installed in target: {}".format(", ".join(sorted(missing))))
+            missing_lang = ", ".join(sorted(missing))
+            raise PGMigrateValidationFailedError(f"Languages not installed in target: {missing_lang}")
 
     def _check_pg_ext(self):
         source_db: PGDatabase
@@ -253,7 +237,7 @@ class PGMigrate:
                 continue
             dbname = source_db.dbname
             for source_ext in source_db.pg_ext:
-                if source_ext.name in self.target.excluded_extensions:
+                if self.excluded_extensions and source_ext.name in self.excluded_extensions:
                     logger.info("Extension %r will not be installed in target", source_ext.name)
                     continue
 
@@ -280,10 +264,10 @@ class PGMigrate:
                 # check if extension is available for installation in target
                 try:
                     target_ext = next(e for e in self.target.pg_ext if e.name == source_ext.name)
-                except StopIteration:
+                except StopIteration as e:
                     msg = f"Extension {source_ext.name!r} is not available for installation in target"
                     logger.error(msg)
-                    raise PGMigrateValidationFailedError(msg)
+                    raise PGMigrateValidationFailedError(msg) from e
 
                 logger.info(
                     "Extension %r version %r available for installation in target, source version: %r", target_ext.name,
@@ -363,17 +347,27 @@ class PGMigrate:
                 continue
             if self.source.large_objects_present(dbname=source_db.dbname):
                 logger.warning(
-                    "Large objects detected: large objects are not compatible with logical replication: https://www.postgresql.org/docs/14/logical-replication-restrictions.html"
+                    "Large objects detected: large objects are not compatible with logical replication: "
+                    "https://www.postgresql.org/docs/14/logical-replication-restrictions.html"
                 )
 
-    def _migrate_roles(self) -> Dict[str, PGRoleTask]:
-        roles: Dict[str, PGRoleTask] = dict()
-        rolname: str
-        role: PGRole
+    def _log_replication_params(self):
+        for pg_cluster, label in ((self.source, "Source"), (self.target, "Target")):
+            if pg_cluster and pg_cluster.params:
+                logger.info(
+                    "%s: max_replication_slots = %s, max_logical_replication_workers = %s, "
+                    "max_worker_processes = %s, wal_level = %s, max_wal_senders = %s", label,
+                    pg_cluster.params.get("max_replication_slots"), pg_cluster.params.get("max_logical_replication_workers"),
+                    pg_cluster.params.get("max_worker_processes"), pg_cluster.params.get("wal_level"),
+                    pg_cluster.params.get("max_wal_senders")
+                )
+
+    def _migrate_roles(self) -> list[RoleMigrateTask]:
+        roles = {}
         for rolname, role in self.source.pg_roles.items():
             if rolname in self.target.pg_roles:
                 logger.warning("Role %r already exists in target", rolname)
-                roles[role.rolname] = PGRoleTask(
+                roles[role.rolname] = RoleMigrateTask(
                     rolname=rolname,
                     status=PGRoleStatus.exists,
                     message="role already exists",
@@ -390,7 +384,7 @@ class PGMigrate:
                 "REPLICATION" if role.rolreplication else "NOREPLICATION",
                 "BYPASSRLS" if role.rolbypassrls else "NOBYPASSRLS",
             )
-            params: List[Any] = []
+            params: list[str | int] = []
             if role.rolconnlimit != -1:
                 sql += " CONNECTION LIMIT %s"
                 params.append(role.rolconnlimit)
@@ -402,7 +396,7 @@ class PGMigrate:
             try:
                 self.target.c(sql, args=params, return_rows=0)
             except psycopg2.ProgrammingError as err:
-                roles[role.rolname] = PGRoleTask(
+                roles[role.rolname] = RoleMigrateTask(
                     rolname=rolname,
                     status=PGRoleStatus.failed,
                     message=err.diag.message_primary,
@@ -413,161 +407,71 @@ class PGMigrate:
                         key, value = conf.split("=", 1)
                         logger.info("Setting config for role %r: %s = %s", role.rolname, key, value)
                         self.target.c(f'ALTER ROLE {role.safe_rolname} SET "{key}" = %s', args=(value, ), return_rows=0)
-                roles[role.rolname] = PGRoleTask(
+                roles[role.rolname] = RoleMigrateTask(
                     rolname=rolname,
                     rolpassword=role.rolpassword,
                     status=PGRoleStatus.created,
                     message="role created",
                 )
 
-        return roles
+        return list(roles.values())
 
-    def _log_stream(self, stream, label: str, log_level: int, buffer: Optional[deque]):
-        msg_template = f"{label} %s"
-        for line in stream:
-            decoded_line = line.decode(errors="replace").strip()
-            if decoded_line:
-                logger.log(log_level, msg_template, decoded_line)
-                if buffer is not None:
-                    buffer.append(decoded_line)
-        stream.close()
-
-    def _build_pg_restore_cmd(self, target_conn_str: str, createdb: bool = False) -> List[str]:
-        pg_restore_cmd = [
-            str(self.pgbin / "pg_restore"),
-            "-d",
-            target_conn_str,
-        ]
-        if self.verbose:
-            pg_restore_cmd.append("--verbose")
-        if createdb:
-            pg_restore_cmd.append("--create")
-        return pg_restore_cmd
-
-    def _pg_dump_pipe_pg_restore(
-        self, *, pg_dump_cmd: Sequence[str], pg_restore_cmd: Sequence[str], dbname: str, pg_dump_type: PgDumpType
-    ) -> PgDumpTask:
-        pg_dump = subprocess.Popen(pg_dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        pg_restore = subprocess.Popen(pg_restore_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # allow pg_dump to receive a SIGPIPE if pg_restore exists
-        pg_dump.stdout.close()
-
-        pg_dump_log_label = f"[pg_dump({pg_dump.pid})][{pg_dump_type.value}][{dbname}]"
-        pg_restore_log_label = f"[pg_restore({pg_restore.pid})][{pg_dump_type.value}][{dbname}]"
-
-        # We need to detect a log entry in pg_restore indicating that the restore has completed but with errors.
-        # It writes this at the end, so we're saving its last log entries.
-        pg_restore_log_buffer = deque(maxlen=10)
-        threads = [
-            threading.Thread(
-                target=self._log_stream, daemon=True, args=(pg_dump.stderr, pg_dump_log_label, logging.WARNING, None)
-            ),
-            threading.Thread(
-                target=self._log_stream,
-                daemon=True,
-                args=(pg_restore.stderr, pg_restore_log_label, logging.WARNING, pg_restore_log_buffer)
-            ),
-            threading.Thread(
-                target=self._log_stream, daemon=True, args=(pg_restore.stdout, pg_restore_log_label, logging.INFO, None)
+    def _dump_schema(self, *, dbname: str) -> DumpTaskResult:
+        logger.info("Dumping schema from database %r", dbname)
+        assert self.pgbin
+        pg_dump_cmd = build_pg_dump_cmd(
+            self.pgbin,
+            self.source.conn_str(dbname=dbname),
+            extensions=self.get_extensions_to_migrate(dbname),
+            schema_only=True,
+            no_owner=True,
+            verbose=self.verbose
+        )
+        pg_restore_cmd = build_pg_restore_cmd(
+            self.pgbin,
+            self.target.conn_str() if self.createdb else self.target.conn_str(dbname=dbname),
+            createdb=self.createdb,
+            verbose=self.verbose
+        )
+        try:
+            return run_pg_dump_pg_restore(
+                dbname=dbname, pg_dump_type=DumpType.schema, pg_dump_cmd=pg_dump_cmd, pg_restore_cmd=pg_restore_cmd
             )
-        ]
-        for t in threads:
-            t.start()
+        except Exception as e:
+            logger.exception("Schema dump failed for database %s", dbname)
+            return DumpTaskResult(
+                status=PGMigrateStatus.failed,
+                type=DumpType.schema,
+                error=e,
+            )
 
-        tracked_proc = {pg_dump_log_label: pg_dump, pg_restore_log_label: pg_restore}
-        while tracked_proc:
-            for proc_log_label, proc in list(tracked_proc.items()):
-                try:
-                    retcode = proc.wait(timeout=120)
-                    logger.info("Process %s exited with code %s", proc_log_label, retcode)
-                    tracked_proc.pop(proc_log_label)
-                except subprocess.TimeoutExpired:
-                    logger.info("Process %s is still running...", proc_log_label)
-
-        for t in threads:
-            t.join(timeout=10)
-            if t.is_alive():
-                logger.warning("Logs reading thread %s did not finish in time, it may still be running", t.name)
-
-        pg_restore_errors_warning = None
-        for log_line in pg_restore_log_buffer:
-            if 'errors ignored on restore' in log_line:
-                pg_restore_errors_warning = log_line
-
-        if pg_dump.returncode == 0 and pg_restore.returncode == 0:
-            status = PgDumpStatus.success
-        elif pg_dump.returncode == 0 and pg_restore.returncode != 0 and pg_restore_errors_warning:
-            status = PgDumpStatus.with_warnings
-        else:
-            status = PgDumpStatus.failed
-
-        return PgDumpTask(
-            status=status,
-            dbname=dbname,
-            type=pg_dump_type,
-            pg_dump_returncode=pg_dump.returncode,
-            pg_restore_returncode=pg_restore.returncode,
-            pg_restore_warnings=pg_restore_errors_warning,
+    def _dump_data(self, *, db: PGDatabase) -> DumpTaskResult:
+        dbname = db.dbname
+        logger.info("Dumping data from database %r", dbname)
+        assert self.pgbin
+        pg_dump_cmd = build_pg_dump_cmd(
+            self.pgbin,
+            self.source.conn_str(dbname=dbname),
+            extensions=self.get_extensions_to_migrate(dbname),
+            tables=self.filter_tables(db),
+            data_only=True,
+            verbose=self.verbose
         )
-
-    def _dump_schema(self, *, db: PGDatabase) -> None:
-        logger.info("Dumping schema from database %r", db.dbname)
-
-        pg_dump_cmd = [
-            str(self.pgbin / "pg_dump"),
-            # Setting owner requires superuser when generated script is run or the same user that owns
-            # all of the objects in the script. Using '--no-owner' gives ownership of all the objects to
-            # the user who is running the script.
-            "--no-owner",
-            # Skip COMMENT statements as they require superuser (--no-comments is available in pg 11).
-            # "--no-comments",
-            "--schema-only",
-            "-Fc",
-            self.source.conn_str(dbname=db.dbname),
-        ]
-
-        # PG 13 and older versions do not support `--extension` option.
-        # The migration still succeeds with some unharmful error messages in the output.
-        if db and self.source.version >= Version("14"):
-            pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
-
-        if self.createdb:
-            pg_restore_cmd = self._build_pg_restore_cmd(self.target.conn_str(), createdb=True)
-        else:
-            pg_restore_cmd = self._build_pg_restore_cmd(self.target.conn_str(dbname=db.dbname), createdb=False)
-
-        subtask: PgDumpTask = self._pg_dump_pipe_pg_restore(
-            dbname=db.dbname, pg_dump_type=PgDumpType.schema, pg_dump_cmd=pg_dump_cmd, pg_restore_cmd=pg_restore_cmd
-        )
-        if subtask.status == PgDumpStatus.failed:
-            raise PGSchemaDumpFailedError(f"Failed to dump schema: {subtask!r}")
-
-    def _dump_data(self, *, db: PGDatabase) -> PGMigrateStatus:
-        logger.info("Dumping data from database %r", db.dbname)
-        pg_dump_cmd = [
-            str(self.pgbin / "pg_dump"),
-            "-Fc",
-            "--data-only",
-            self.source.conn_str(dbname=db.dbname),
-        ]
-        tables = self.filter_tables(db) or []
-        pg_dump_cmd.extend([f"--table={w}" for w in tables])
-
-        # PG 13 and older versions do not support `--extension` option.
-        # The migration still succeeds with some unharmful error messages in the output.
-        if self.source.version >= Version("14"):
-            pg_dump_cmd.extend([f"--extension={ext}" for ext in self.filter_extensions(db)])
-
-        pg_restore_cmd = self._build_pg_restore_cmd(self.target.conn_str(dbname=db.dbname), createdb=False)
-        subtask: PgDumpTask = self._pg_dump_pipe_pg_restore(
-            dbname=db.dbname,
-            pg_dump_type=PgDumpType.data,
-            pg_dump_cmd=pg_dump_cmd,
-            pg_restore_cmd=pg_restore_cmd,
-        )
-        if subtask.status == PgDumpStatus.failed:
-            raise PGDataDumpFailedError(f"Failed to dump data: {subtask!r}")
-        return PGMigrateStatus.done
+        pg_restore_cmd = build_pg_restore_cmd(self.pgbin, self.target.conn_str(dbname=dbname), verbose=self.verbose)
+        try:
+            return run_pg_dump_pg_restore(
+                dbname=dbname,
+                pg_dump_type=DumpType.data,
+                pg_dump_cmd=pg_dump_cmd,
+                pg_restore_cmd=pg_restore_cmd,
+            )
+        except Exception as e:
+            logger.exception("Data dump failed for database %s", dbname)
+            return DumpTaskResult(
+                status=PGMigrateStatus.failed,
+                type=DumpType.data,
+                error=e,
+            )
 
     def _wait_for_replication(self, *, dbname: str, check_interval: float = 2.0):
         while True:
@@ -578,62 +482,87 @@ class PGMigrate:
                 break
             time.sleep(check_interval)
 
-    def _db_replication(self, *, db: PGDatabase) -> PGMigrateStatus:
+    def _setup_logical_replication(self, *, db: PGDatabase) -> ReplicationSetupResult:
         dbname = db.dbname
         try:
-            tables = self.filter_tables(db) or []
-            self.source.create_publication(dbname=dbname, only_tables=tables)
-            self.source.create_replication_slot(dbname=dbname)
-            self.target.create_subscription(conn_str=self.source.conn_str(dbname=dbname), dbname=dbname)
-
-        except psycopg2.ProgrammingError as e:
-            logger.error("Encountered error: %r, cleaning up", e)
-
-            # clean-up replication objects, avoid leaving traces specially in source
-            self.target.cleanup(dbname=dbname)
-            self.source.cleanup(dbname=dbname)
-            raise
-
-        logger.info("Logical replication setup successful for database %r", dbname)
-        if self.max_replication_lag > -1:
-            self._wait_for_replication(dbname=dbname)
-        if self.stop_replication:
-            self.target.cleanup(dbname=dbname)
-            self.source.cleanup(dbname=dbname)
-            return PGMigrateStatus.done
-
-        # leaving replication running
-        return PGMigrateStatus.running
-
-    def _db_migrate(self, *, pgtask: PGMigrateTask) -> PGMigrateStatus:
-        """Migrate, executes in thread"""
-        if pgtask.source_db.error:
-            raise pgtask.source_db.error
-        if pgtask.target_db and pgtask.target_db.error:
-            raise pgtask.target_db.error
-
-        self._dump_schema(db=pgtask.source_db)
-        self.target.refresh_db(db=pgtask.source_db)
-
-        fallback_to_dump = pgtask.method is None
-
-        # if method is not yet specified we'll try replication first and dump
-        # second
-        if self.source.replication_available and fallback_to_dump:
-            pgtask.method = PGMigrateMethod.replication
-
-        if pgtask.method == PGMigrateMethod.replication:
             try:
-                return self._db_replication(db=pgtask.source_db)
-            except psycopg2.ProgrammingError as err:
-                if err.pgcode == psycopg2.errorcodes.INSUFFICIENT_PRIVILEGE and fallback_to_dump:
-                    logger.warning("Logical replication failed with error: %r, fallback to dump", err.diag.message_primary)
-                else:
-                    # unexpected error
-                    raise
+                tables = self.filter_tables(db) or []
+                self.source.create_publication(dbname=dbname, only_tables=tables)
+                self.source.create_replication_slot(dbname=dbname)
+                self.target.create_subscription(conn_str=self.source.conn_str(dbname=dbname), dbname=dbname)
+            except psycopg2.ProgrammingError as e:
+                logger.error("Encountered error: %r, cleaning up", e)
+                # clean-up replication objects, avoid leaving traces specially in source
+                self.target.cleanup(dbname=dbname)
+                self.source.cleanup(dbname=dbname)
+                raise
 
-        pgtask.method = PGMigrateMethod.dump
-        return self._dump_data(db=pgtask.source_db)
+            logger.info("Logical replication setup successful for database %r", dbname)
+            if self.max_replication_lag > -1:
+                self._wait_for_replication(dbname=dbname)
+            if self.stop_replication:
+                self.target.cleanup(dbname=dbname)
+                self.source.cleanup(dbname=dbname)
+                return ReplicationSetupResult(status=PGMigrateStatus.done)
+
+            # leaving replication running
+            return ReplicationSetupResult(status=PGMigrateStatus.running)
+
+        except Exception as e:
+            logger.error("Logical replication setup failed for database %s. %r", dbname, e)
+            return ReplicationSetupResult(
+                status=PGMigrateStatus.failed,
+                error=e,
+            )
+
+    def _db_migrate(
+        self, *, migrate_method: PGMigrateMethod, source_db: PGDatabase, target_db: PGDatabase | None
+    ) -> DBMigrateResult:
+        """Migrate, executes in thread"""
+        dmr = DBMigrateResult(
+            status=PGMigrateStatus.done,  # could change later
+            dbname=source_db.dbname,
+            migrate_method=migrate_method,
+        )
+        try:
+            if source_db.error:
+                dmr.source_db_error = source_db.error
+                dmr.status = PGMigrateStatus.failed
+                return dmr
+            if target_db and target_db.error:
+                dmr.target_db_error = target_db.error
+                dmr.status = PGMigrateStatus.failed
+                return dmr
+
+            dmr.dump_schema_result = self._dump_schema(dbname=source_db.dbname)
+            if dmr.dump_schema_result.status == PGMigrateStatus.failed:
+                dmr.status = PGMigrateStatus.failed
+                return dmr
+
+            self.target.refresh_db(db=source_db)
+            if migrate_method == PGMigrateMethod.schema_only:
+                pass
+            elif migrate_method == PGMigrateMethod.dump:
+                dmr.dump_data_result = self._dump_data(db=source_db)
+                dmr.status = dmr.dump_data_result.status
+            elif migrate_method == PGMigrateMethod.replication:
+                dmr.replication_setup_result = self._setup_logical_replication(db=source_db)
+                dmr.status = dmr.replication_setup_result.status
+            elif migrate_method == PGMigrateMethod.replication_with_dump_fallback:
+                dmr.replication_setup_result = self._setup_logical_replication(db=source_db)
+                dmr.status = dmr.replication_setup_result.status
+                if dmr.status == PGMigrateStatus.failed:
+                    logger.warning("Replication setup failed, falling back to dump")
+                    dmr.dump_data_result = self._dump_data(db=source_db)
+                    dmr.status = dmr.dump_data_result.status
+            else:
+                raise NotImplementedError(f"Migration method {migrate_method} is not implemented")
+            return dmr
+        except Exception as e:
+            logger.exception("Migration failed for database %s", source_db.dbname)
+            dmr.status = PGMigrateStatus.failed
+            dmr.error = e
+            return dmr
 
     def validate(self, dbs_max_total_size: Optional[float] = None):
         """
@@ -675,273 +604,42 @@ class PGMigrate:
             logger.error(err)
             raise PGMigrateValidationFailedError(str(err)) from err
 
-    def migrate(self, force_method: Optional[PGMigrateMethod] = None) -> PGMigrateResult:
+    def migrate(self) -> PGMigrateResult:
         """Migrate source database(s) to target"""
-        self.validate()
+        pg_migrate_result = PGMigrateResult()
+        try:
+            self.validate()
+            pg_migrate_result.validation = ValidationResult(status=PGMigrateStatus.done)
+        except Exception as e:
+            logger.exception("Validation failed, migration cannot continue")
+            pg_migrate_result.validation = ValidationResult(status=PGMigrateStatus.failed, error=e)
+            return pg_migrate_result
 
-        if self.source.replication_available:
-            # Figuring out the max number of simultaneous logical replications is bit tedious to do,
-            # https://www.postgresql.org/docs/current/logical-replication-config.html
-            # Using 2 for now.
-            logger.info("Logical replication available in source (%s)", self.source.version)
-            for p, s in (
-                (
-                    self.source.params,
-                    "Source",
-                ),
-                (
-                    self.target.params,
-                    "Target",
-                ),
-            ):
-                logger.info(
-                    "%s: max_replication_slots = %s, max_logical_replication_workers = %s, "
-                    "max_worker_processes = %s, wal_level = %s, max_wal_senders = %s", s, p["max_replication_slots"],
-                    p["max_logical_replication_workers"], p["max_worker_processes"], p["wal_level"], p["max_wal_senders"]
-                )
-            max_workers = 2
-        else:
-            logger.info("Logical replication not available in source (%s)", self.source.version)
-            max_workers = min(self.max_workers, os.cpu_count() or 2)
-
-        logger.info("Using max %d workers", max_workers)
-
-        result = PGMigrateResult()
-
+        self._log_replication_params()
         # roles are global, let's migrate them first
-        pg_roles: Dict[str, PGRoleTask] = self._migrate_roles()
-        r: PGRoleTask
-        for r in pg_roles.values():
-            result.pg_roles[r.rolname] = r.result()
+        pg_migrate_result.role_migrate_results = self._migrate_roles()
 
-        tasks: Dict[futures.Future, PGMigrateTask] = {}
-
-        with futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aiven_db_migrate") as executor:
+        # migrate databases in parallel using threads
+        future_dbname_map = {}
+        logger.info("Using %d workers", self.max_workers)
+        with futures.ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="aiven_db_migrate") as executor:
             for source_db in self.source.databases.values():
                 target_db = self.target.databases.get(source_db.dbname)
-                pgtask = PGMigrateTask(source_db=source_db, target_db=target_db, method=force_method)
-                task_future = executor.submit(self._db_migrate, pgtask=pgtask)
-                tasks[task_future] = pgtask
-
-        for future in futures.as_completed(tasks):
-            task = tasks[future]
-            assert future.done()
-            task.error = future.exception()
-            if task.error:
-                task.status = PGMigrateStatus.failed
-            elif future.cancelled():
-                task.status = PGMigrateStatus.cancelled
-            else:
-                task.status = future.result()
-
-        logger.debug("Waiting for tasks: %r", tasks)
-        futures.wait(tasks)
-
-        t: PGMigrateTask
-        for t in tasks.values():
-            result.pg_databases[t.source_db.dbname] = t.result()
-
-        return result
-
-
-def main(args=None, *, prog="pg_migrate"):
-    """CLI for PostgreSQL migration tool"""
-    import argparse
-
-    parser = argparse.ArgumentParser(description="PostgreSQL migration tool.", prog=prog)
-    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging.")
-    parser.add_argument(
-        "-s",
-        "--source",
-        help=(
-            "Source PostgreSQL server, either postgres:// uri or libpq connection string. "
-            "Required if `SOURCE_SERVICE_URI` environment variable is not set."
-        ),
-        required=not os.getenv("SOURCE_SERVICE_URI"),
-    )
-    parser.add_argument(
-        "-t",
-        "--target",
-        help=(
-            "Target PostgreSQL server, either postgres:// uri or libpq connection string. "
-            "Required if `TARGET_SERVICE_URI` environment variable is not set."
-        ),
-        required=not os.getenv("TARGET_SERVICE_URI"),
-    )
-    parser.add_argument(
-        "-f", "--filtered-db", help="Comma separated list of databases to filter out during migrations", required=False
-    )
-    parser.add_argument(
-        "-xr",
-        "--excluded-roles",
-        help="Comma separated list of database roles to exclude during migrations",
-        required=False,
-    )
-    parser.add_argument(
-        "-xe",
-        "--excluded-extensions",
-        help="Comma separated list of database extensions to exclude during migrations",
-        required=False,
-    )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
-    parser.add_argument(
-        "--no-createdb", action="store_false", dest="createdb", help="Don't automatically create database(s) in target."
-    )
-    parser.add_argument(
-        "-m",
-        "--mangle",
-        action="store_true",
-        help="Mangle the DB name for the purpose of having a predictable identifier len",
-    )
-    parser.add_argument(
-        "--max-replication-lag",
-        type=int,
-        default=-1,
-        help="Max replication lag in bytes to wait for, by default no wait (no effect when replication isn't available).",
-    )
-    parser.add_argument(
-        "--stop-replication",
-        action="store_true",
-        help=(
-            "Stop replication, by default replication is left running (no effect when replication isn't available). "
-            "Requires also '--max-replication-lag' >= 0, i.e. wait until replication lag in bytes is less than/equal "
-            "to given max replication lag and then stop replication."
-        ),
-    )
-    parser.add_argument("--validate", action="store_true", help="Run only best effort validation.")
-    table_common_help = (
-        " Table names can be qualified by name only, schema name and table name or DB , schema and table name."
-        " Tables with no DB specified will attempt a match against all present databases."
-        " Tables with no schema specified will attempt a match against all schemas in all databases."
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--with-table",
-        action="append",
-        help=(
-            "When specified, the migration method will include the named tables only instead of all tables. "
-            "Can be specified multiple times. Cannot be used together with --skip-table." + table_common_help
-        ),
-    )
-    group.add_argument(
-        "--skip-table",
-        action="append",
-        help=(
-            "When specified, the migration method will include all tables except the named tables. "
-            "Can be specified multiple times. Cannot be used together with --with-table." + table_common_help
-        ),
-    )
-    parser.add_argument(
-        "--replicate-extension-tables",
-        dest="replicate_extension_tables",
-        action="store_true",
-        default=True,
-        help=(
-            "logical replication should try to add tables "
-            "belonging to extensions to the publication definition (default)"
-        ),
-    )
-    parser.add_argument(
-        "--no-replicate-extension-tables",
-        dest="replicate_extension_tables",
-        action="store_false",
-        help="Do not add tables belonging to extensions to the publication definition",
-    )
-    parser.add_argument(
-        "--force-method",
-        default=None,
-        help="Force the migration method to be used as either replication or dump.",
-    )
-    parser.add_argument(
-        "--dbs-max-total-size",
-        type=int,
-        default=-1,
-        help="Max total size of databases to be migrated, ignored by default",
-    )
-    parser.add_argument(
-        "--pgbin",
-        type=str,
-        default=None,
-        help="Path to pg_dump and other postgresql binaries",
-    )
-    parser.add_argument(
-        "--skip-db-version-check",
-        action="store_true",
-        help="Skip PG version check between source and target",
-    )
-    parser.add_argument(
-        "--show-passwords",
-        action="store_true",
-        help="Show generated placeholder roles passwords in the output, by default passwords are not shown",
-    )
-    parser.add_argument(
-        "--migration-id",
-        default=''.join(random.choices(string.ascii_letters + string.digits, k=4)),
-        help="This identifier will be added to all logs"
-    )
-
-    args = parser.parse_args(args)
-    log_format = f"%(asctime)s\t{args.migration_id}\t%(name)s\t%(levelname)s\t%(message)s"
-    if args.debug:
-        logging.basicConfig(level=logging.DEBUG, format=log_format)
-    else:
-        logging.basicConfig(level=logging.INFO, format=log_format)
-
-    pg_mig = PGMigrate(
-        source_conn_info=os.getenv("SOURCE_SERVICE_URI") or args.source,
-        target_conn_info=os.getenv("TARGET_SERVICE_URI") or args.target,
-        pgbin=args.pgbin,
-        createdb=args.createdb,
-        max_replication_lag=args.max_replication_lag,
-        stop_replication=args.stop_replication,
-        verbose=args.verbose,
-        filtered_db=args.filtered_db,
-        excluded_roles=args.excluded_roles,
-        excluded_extensions=args.excluded_extensions,
-        mangle=args.mangle,
-        skip_tables=args.skip_table,
-        with_tables=args.with_table,
-        replicate_extensions=args.replicate_extension_tables,
-        skip_db_version_check=args.skip_db_version_check,
-    )
-
-    method = None
-    if args.force_method:
-        try:
-            method = PGMigrateMethod[args.force_method]
-        except KeyError as e:
-            raise ValueError(f"Unsupported migration method '{args.force_method}'") from e
-
-    if args.validate:
-        dbs_max_total_size = None if args.dbs_max_total_size == -1 else args.dbs_max_total_size
-        pg_mig.validate(dbs_max_total_size=dbs_max_total_size)
-    else:
-        result: PGMigrateResult = pg_mig.migrate(force_method=method)
-        logger.info("Roles:")
-        for role in result.pg_roles.values():
-            rolpassword = role["rolpassword"]
-            if rolpassword is None:
-                rolpassword = "-"
-            elif not args.show_passwords:
-                rolpassword = "<hidden>"
-            logger.info(
-                "  rolname: {!r}, rolpassword: {!r}, status: {!r}, message: {!r}".format(
-                    role["rolname"], rolpassword, role["status"], role["message"]
+                task_future = executor.submit(
+                    self._db_migrate, migrate_method=self.migrate_method, source_db=source_db, target_db=target_db
                 )
-            )
-        logger.info("Databases:")
-        has_failures = False
-        for db in result.pg_databases.values():
-            if db["status"] == PGMigrateStatus.failed:
-                has_failures = True
-            logger.info(
-                "  dbaname: {!r}, method: {!r}, status: {!r}, message: {!r}".format(
-                    db["dbname"], db["method"], db["status"], db["message"]
+                future_dbname_map[task_future] = source_db.dbname
+
+        for future in futures.as_completed(future_dbname_map):
+            dbname = future_dbname_map[future]
+            try:
+                db_migrate_result = future.result()
+            except Exception as e:
+                db_migrate_result = DBMigrateResult(
+                    dbname=dbname,
+                    status=PGMigrateStatus.failed,
+                    migrate_method=self.migrate_method,
+                    error=e,
                 )
-            )
-        if has_failures:
-            sys.exit("Database migration did not succeed")
-
-
-if __name__ == "__main__":
-    main()
+            pg_migrate_result.db_migrate_results.append(db_migrate_result)
+        return pg_migrate_result

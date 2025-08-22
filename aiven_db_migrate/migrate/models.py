@@ -1,12 +1,11 @@
 # Copyright (c) 2025 Aiven, Helsinki, Finland. https://aiven.io/
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
 
 import enum
 
 
-class ReplicationObjectType(enum.Enum):
+class ReplicationObjectType(enum.StrEnum):
     PUBLICATION = "pub"
     SUBSCRIPTION = "sub"
     REPLICATION_SLOT = "slot"
@@ -20,15 +19,15 @@ class PGExtension:
     name: str
     version: str
     superuser: bool = True
-    trusted: Optional[bool] = None
+    trusted: bool | None = None
 
 
 @dataclass(frozen=True)
 class PGTable:
-    db_name: Optional[str]
-    schema_name: Optional[str]
+    db_name: str | None
+    schema_name: str | None
     table_name: str
-    extension_name: Optional[str]
+    extension_name: str | None
 
     def __str__(self) -> str:
         if not self.schema_name:
@@ -51,10 +50,10 @@ class PGTable:
 @dataclass
 class PGDatabase:
     dbname: str
-    tables: Set[PGTable]
-    pg_ext: List[PGExtension] = field(default_factory=list)
+    tables: list[PGTable]
+    pg_ext: list[PGExtension] = field(default_factory=list)
     has_aiven_extras: bool = False
-    error: Optional[BaseException] = None
+    error: BaseException | None = None
 
 
 @dataclass
@@ -68,98 +67,86 @@ class PGRole:
     rolreplication: bool
     rolconnlimit: int
     # placeholder password
-    rolpassword: Optional[str] = field(repr=False)
-    rolvaliduntil: Optional[datetime]
+    rolpassword: str | None = field(repr=False)
+    rolvaliduntil: datetime | None
     rolbypassrls: bool
-    rolconfig: List[str]
+    rolconfig: list[str]
     safe_rolname: str
 
 
 @enum.unique
-class PGRoleStatus(str, enum.Enum):
+class PGRoleStatus(enum.StrEnum):
     created = "created"
     exists = "exists"
     failed = "failed"
 
 
 @dataclass
-class PGRoleTask:
+class RoleMigrateTask:
     message: str
     rolname: str
     status: PGRoleStatus
-    rolpassword: Optional[str] = field(repr=False, default=None)
-
-    def result(self) -> Dict[str, Optional[str]]:
-        return {
-            "message": self.message,
-            "rolname": self.rolname,
-            "rolpassword": self.rolpassword,
-            "status": self.status.name,
-        }
+    rolpassword: str | None = field(repr=False, default=None)
 
 
 @enum.unique
-class PGMigrateMethod(str, enum.Enum):
+class PGMigrateMethod(enum.StrEnum):
     dump = "dump"
     replication = "replication"
+    replication_with_dump_fallback = "replication_with_dump_fallback"
+    schema_only = "schema_only"
 
 
 @enum.unique
-class PGMigrateStatus(str, enum.Enum):
+class PGMigrateStatus(enum.StrEnum):
     cancelled = "cancelled"
     done = "done"
     failed = "failed"
     running = "running"
 
 
-class PgDumpType(enum.Enum):
+class DumpType(enum.StrEnum):
     schema = "S"
     data = "D"
 
 
-class PgDumpStatus(enum.Enum):
-    success = "success"
-    with_warnings = "with_warnings"
-    failed = "failed"
+@dataclass
+class DumpTaskResult:
+    status: PGMigrateStatus
+    type: DumpType
+    error: BaseException | None = None
+    pg_dump_returncode: int | None = None
+    pg_restore_returncode: int | None = None
+    pg_restore_warnings: str | None = None
 
 
 @dataclass
-class PgDumpTask:
-    status: PgDumpStatus
-    type: PgDumpType
+class ReplicationSetupResult:
+    status: PGMigrateStatus
+    error: BaseException | None = None
+
+
+@dataclass
+class ValidationResult:
+    status: PGMigrateStatus
+    error: BaseException | None = None
+
+
+@dataclass
+class DBMigrateResult:
+    status: PGMigrateStatus
     dbname: str
-    pg_dump_returncode: int
-    pg_restore_returncode: int
-    pg_restore_warnings: str | None
+    migrate_method: PGMigrateMethod
+    error: BaseException | None = None  # General error during migration which is not related to a specific stage
+    source_db_error: BaseException | None = None
+    target_db_error: BaseException | None = None
+    dump_schema_result: DumpTaskResult | None = None
+    dump_data_result: DumpTaskResult | None = None
+    replication_setup_result: ReplicationSetupResult | None = None
 
 
 @dataclass
 class PGMigrateResult:
-    pg_databases: Dict[str, Any] = field(default_factory=dict)
-    pg_roles: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class PGMigrateTask:
-    source_db: PGDatabase
-    target_db: Optional[PGDatabase]
-    error: Optional[BaseException] = None
-    method: Optional[PGMigrateMethod] = None
-    status: Optional[PGMigrateStatus] = None
-
-    def result(self) -> Dict[str, Optional[str]]:
-        dbname = self.source_db.dbname
-        if self.error:
-            message = str(self.error)
-        elif self.target_db:
-            message = "migrated to existing database"
-        else:
-            message = "created and migrated database"
-        method = self.method.name if self.method else None
-        status = self.status.name if self.status else None
-        return {
-            "dbname": dbname,
-            "message": message,
-            "method": method,
-            "status": status,
-        }
+    validation: ValidationResult | None = None
+    role_migrate_results: list[RoleMigrateTask] = field(default_factory=list)
+    db_migrate_results: list[DBMigrateResult] = field(default_factory=list)

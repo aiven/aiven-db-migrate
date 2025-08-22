@@ -1,6 +1,6 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
-from aiven_db_migrate.migrate.models import PGDatabase
+from aiven_db_migrate.migrate.models import PGDatabase, PGMigrateMethod
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from test.utils import PGRunner, random_string
 from typing import Tuple
@@ -24,16 +24,14 @@ def test_dump(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: bool):
         target.create_db(dbname=dbname)
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump
     )
-
-    # evaluates pgbin dir (pg_dump needs to be from same version as source)
-    pg_mig.validate()
-
-    # dump both schema and data
-    db = PGDatabase(dbname=dbname, tables=set())
-    pg_mig._dump_schema(db=db)  # pylint: disable=protected-access
-    pg_mig._dump_data(db=db)  # pylint: disable=protected-access
+    result = pg_mig.migrate()
+    assert result.db_migrate_results
 
     # verify that db/table migrated to target
     exists = pg_mig.target.c(
