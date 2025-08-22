@@ -1,23 +1,16 @@
 [MASTER]
-load-plugins=pylint_quotes
-
-string-quote=double-avoid-escape
-triple-quote=double
-docstring-quote=double
+py-version=3.12
 
 [MESSAGES CONTROL]
 disable=
     abstract-method,
-    bad-continuation,
-    chained-comparison,  # R1716: Simplify chained comparison between the operands
+    broad-exception-caught,
+    consider-using-with,
     duplicate-code,
     fixme,
     invalid-name,
-    len-as-condition,
     missing-docstring,
     no-else-return,
-    no-else-raise,
-    no-self-use,
     superfluous-parens,
     too-few-public-methods,
     too-many-ancestors,
@@ -28,15 +21,14 @@ disable=
     too-many-lines,
     too-many-locals,
     too-many-nested-blocks,
+    too-many-positional-arguments,
     too-many-public-methods,
     too-many-statements,
-    ungrouped-imports,
-    unused-argument,
     wrong-import-order,
-    line-too-long,
-    no-else-continue,
-    no-else-break,
-    import-outside-toplevel
+    no-else-raise,
+    unsupported-membership-test,
+    consider-using-f-string,
+    unspecified-encoding
 
 [FORMAT]
 max-line-length=125
@@ -47,3 +39,4 @@ reports=no
 score=no
 
 [TYPECHECK]
+ignored-modules=psycopg2,psycopg2.extras,packaging.version
