@@ -13,7 +13,7 @@ such as `pg_dumpall`, not useful when migrating database to/from service provide
 
 Currently this tool supports only PostgreSQL but we aim to add support for other databases, such as MySQL.
 
-Requires Python 3.10 or newer.
+Requires Python 3.12 or newer.
 
 ## Usage
 
@@ -38,8 +38,7 @@ This installs console scripts which have the same interface as the library modul
 ## PostgreSQL
 
 Requirements:
- * `pg_dump`: from any PostgreSQL version between the source and target versions
- * `psql`: any modern version should work
+ * `pg_dump` and `pg_restore`: from any PostgreSQL version between the source and target versions
 
 Run library module:
 ```
@@ -50,7 +49,7 @@ or, if installed:
 $ pg_migrate -h
 ```
 
-Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 10 to PostgreSQL 14.
+Migrating is supported to the same or newer PostgreSQL version starting from PostgreSQL 12 to PostgreSQL 17.
 Migrating to older version is not supported.
 
 By default it searches `pg_dump` under `/usr/`, when using PostgreSQL installs on different directory such as on Mac, use `--pgbin` parameter to define PostgreSQL home directory. e,g,
@@ -132,23 +131,8 @@ With `--force-method` you can specify if you wish to use either replication or d
 
 Using `--dbs-max-total-size` together with `--validate` you can check if the size of the source database in below some threshold.
 
-### API example
-
-Migrating from AWS RDS to Aiven for PostgreSQL. Logical replication is enabled in source AWS RDS PostgreSQL
-server but `aiven-extras` extension is not installed in target database so migrating falls back to data dump.
-
-```
->>> from aiven.migrate import PGMigrate, PGMigrateResult
->>> pg_mig = PGMigrate(source_conn_info="postgres://postgres:<password>@jappja-pg1.chfhzaircbpb.eu-west-1.rds.amazonaws.com:5432/defaultdb", target_conn_info="postgres://avnadmin:<password>@pg2-test-jappja-test.avns.net:26192/defaultdb?sslmode=require")
->>> result: PGMigrateResult = pg_mig.migrate()
-...
-Logical replication failed with error: 'must be superuser to create subscriptions', fallback to dump
->>> result
-PGMigrateResult(pg_databases={'rdsadmin': {'dbname': 'rdsadmin', 'message': 'FATAL:  pg_hba.conf rejects connection for host "80.220.195.174", user "postgres", database "rdsadmin", SSL on\nFATAL:  pg_hba.conf rejects connection for host "80.220.195.174", user "postgres", database "rdsadmin", SSL off\n', 'method': None, 'status': 'failed'}, 'defaultdb': {'dbname': 'defaultdb', 'message': 'migrated to existing database', 'method': 'dump', 'status': 'done'}}, pg_roles={'rdsadmin': {'message': 'must be superuser to create superusers', 'rolname': 'rdsadmin', 'rolpassword': None, 'status': 'failed'}, 'rds_password': {'message': 'role created', 'rolname': 'rds_password', 'rolpassword': None, 'status': 'created'}, 'rds_superuser': {'message': 'role created', 'rolname': 'rds_superuser', 'rolpassword': None, 'status': 'created'}, 'test_user1': {'message': 'role created', 'rolname': 'test_user1', 'rolpassword': 'placeholder_qkdryldfsrdaocio', 'status': 'created'}, 'rds_ad': {'message': 'role created', 'rolname': 'rds_ad', 'rolpassword': None, 'status': 'created'}, 'rds_iam': {'message': 'role created', 'rolname': 'rds_iam', 'rolpassword': None, 'status': 'created'}, 'rds_replication': {'message': 'role created', 'rolname': 'rds_replication', 'rolpassword': None, 'status': 'created'}, 'rdsrepladmin': {'message': 'must be superuser to create replication users', 'rolname': 'rdsrepladmin', 'rolpassword': None, 'status': 'failed'}, 'postgres': {'message': 'role already exists', 'rolname': 'postgres', 'rolpassword': None, 'status': 'exists'}, 'test_user2': {'message': 'role created', 'rolname': 'test_user2', 'rolpassword': None, 'status': 'created'}})
-```
 
 ### Logical replication
- * requires PostgreSQL 10 or newer
  * `wal_level` needs to be `logical`
  * currently supports only FOR ALL TABLES publication in source
  * [aiven-extras](https://github.com/aiven/aiven-extras) extension installed in both source and target database, or
