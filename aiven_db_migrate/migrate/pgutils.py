@@ -1,13 +1,21 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
+from aiven_db_migrate.migrate.errors import PGDumpError, PGRestoreError
+from aiven_db_migrate.migrate.models import DumpTaskResult, DumpType, PGMigrateStatus
+from collections import deque
 from packaging.version import Version
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Deque, Dict, IO, Optional
 from urllib.parse import parse_qs, urlparse
 
+import logging
 import psycopg2
 import re
 import select
+import subprocess
+import threading
 import time
+
+logger = logging.getLogger("PGMigrateUtils")
 
 
 def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_dir: Path = Path("/usr")) -> Path:
@@ -40,12 +48,10 @@ def find_pgbin_dir(pgversion: str, *, max_pgversion: Optional[str] = None, usr_d
     search_scope_description = [str(search_scope[0] / search_scope[1] / "bin") for search_scope in search_scopes]
     if max_pgversion is not None:
         raise ValueError(
-            "Couldn't find bin dir for any pg version between {!r} and {!r}, tried {!r}".format(
-                pgversion, max_pgversion, search_scope_description
-            )
+            f"Couldn't find bin dir for any pg version between {pgversion!r} and {max_pgversion!r}, "
+            f"tried {search_scope_description!r}"
         )
-    else:
-        raise ValueError("Couldn't find bin dir for pg version {!r}, tried {!r}".format(pgversion, search_scope_description))
+    raise ValueError(f"Couldn't find bin dir for pg version {pgversion!r}, tried {search_scope_description!r}")
 
 
 def validate_pg_identifier_length(ident: str):
@@ -82,7 +88,7 @@ def parse_connection_string_libpq(connection_string: str) -> Dict[str, Any]:
         if not connection_string:
             break
         if "=" not in connection_string:
-            raise ValueError("expecting key=value format in connection_string fragment {!r}".format(connection_string))
+            raise ValueError(f"expecting key=value format in connection_string fragment {connection_string!r}")
         key, rem = connection_string.split("=", 1)
         if rem.startswith("'"):
             asis, value = False, ""
@@ -97,7 +103,7 @@ def parse_connection_string_libpq(connection_string: str) -> Dict[str, Any]:
                 else:
                     value += rem[i]
             else:
-                raise ValueError("invalid connection_string fragment {!r}".format(rem))
+                raise ValueError(f"invalid connection_string fragment {rem!r}")
             connection_string = rem[i + 1:]  # pylint: disable=undefined-loop-variable
         else:
             res = rem.split(None, 1)
@@ -142,7 +148,7 @@ def wait_select(conn, timeout=None):
         if timeout is not None and timeout > 0:
             time_left = start_time + timeout - time.monotonic()
             if time_left <= 0:
-                raise TimeoutError("wait_select: timeout after {} seconds".format(timeout))
+                raise TimeoutError(f"wait_select: timeout after {timeout} seconds")
         else:
             time_left = 1
         state = conn.poll()
@@ -161,3 +167,138 @@ def wait_select(conn, timeout=None):
             poll.poll(min(1.0, time_left) * 1000)
         finally:
             poll.unregister(conn.fileno())
+
+
+def log_stream(
+    logger_obj: logging.Logger, stream: IO[bytes] | None, label: str, log_level: int, buffer: deque | None = None
+):
+    if stream is None:
+        logger_obj.warning("log_stream called with None stream, label: %s", label)
+        return
+    msg_template = f"{label} %s"
+    for line in stream:
+        decoded_line = line.decode(errors="replace").strip()
+        if decoded_line:
+            logger_obj.log(log_level, msg_template, decoded_line)
+            if buffer is not None:
+                buffer.append(decoded_line)
+    stream.close()
+
+
+def run_pg_dump_pg_restore(
+    *, pg_dump_cmd: list[str], pg_restore_cmd: list[str], dbname: str, pg_dump_type: DumpType
+) -> DumpTaskResult:
+    pg_dump = subprocess.Popen(pg_dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    pg_restore = subprocess.Popen(pg_restore_cmd, stdin=pg_dump.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # allow pg_dump to receive a SIGPIPE if pg_restore exists
+    if pg_dump.stdout:
+        pg_dump.stdout.close()
+
+    pg_dump_log_label = f"[pg_dump({pg_dump.pid})][{pg_dump_type.value}][{dbname}]"
+    pg_restore_log_label = f"[pg_restore({pg_restore.pid})][{pg_dump_type.value}][{dbname}]"
+
+    # We need to detect a log entry in pg_restore indicating that the restore has completed but with errors.
+    # It writes this at the end, so we're saving its last log entries.
+    pg_restore_log_buffer: Deque[str] = deque(maxlen=10)
+    threads = [
+        threading.Thread(
+            target=log_stream, daemon=True, args=(logger, pg_dump.stderr, pg_dump_log_label, logging.WARNING, None)
+        ),
+        threading.Thread(
+            target=log_stream,
+            daemon=True,
+            args=(logger, pg_restore.stderr, pg_restore_log_label, logging.WARNING, pg_restore_log_buffer)
+        ),
+        threading.Thread(
+            target=log_stream, daemon=True, args=(logger, pg_restore.stdout, pg_restore_log_label, logging.INFO, None)
+        )
+    ]
+    for t in threads:
+        t.start()
+
+    tracked_proc = {pg_dump_log_label: pg_dump, pg_restore_log_label: pg_restore}
+    while tracked_proc:
+        for proc_log_label, proc in list(tracked_proc.items()):
+            try:
+                retcode = proc.wait(timeout=120)
+                logger.info("Process %s exited with code %s", proc_log_label, retcode)
+                tracked_proc.pop(proc_log_label)
+            except subprocess.TimeoutExpired:
+                logger.info("Process %s is still running...", proc_log_label)
+
+    for t in threads:
+        t.join(timeout=10)
+        if t.is_alive():
+            logger.warning("Logs reading thread %s did not finish in time, it may still be running", t.name)
+
+    pg_restore_errors_warning = None
+    for log_line in pg_restore_log_buffer:
+        if 'errors ignored on restore' in log_line:
+            pg_restore_errors_warning = log_line
+
+    error: Exception | None = None
+    if pg_dump.returncode != 0:
+        status = PGMigrateStatus.failed
+        error = PGDumpError(f"{pg_dump_log_label} failed. Check the logs for details.")
+    else:
+        if pg_restore.returncode == 0:
+            status = PGMigrateStatus.done
+        elif pg_restore.returncode != 0 and pg_restore_errors_warning:
+            status = PGMigrateStatus.done
+        else:
+            status = PGMigrateStatus.failed
+            error = PGRestoreError(f"{pg_restore_log_label} failed. Check the logs for details.")
+
+    return DumpTaskResult(
+        status=status,
+        type=pg_dump_type,
+        error=error,
+        pg_dump_returncode=pg_dump.returncode,
+        pg_restore_returncode=pg_restore.returncode,
+        pg_restore_warnings=pg_restore_errors_warning,
+    )
+
+
+def build_pg_restore_cmd(pgbin: Path, conn_str: str, createdb: bool = False, verbose: bool = False) -> list[str]:
+    pg_restore_cmd = [
+        str(pgbin / "pg_restore"),
+        "-d",
+        conn_str,
+    ]
+    if verbose:
+        pg_restore_cmd.append("--verbose")
+    if createdb:
+        pg_restore_cmd.append("--create")
+    return pg_restore_cmd
+
+
+def build_pg_dump_cmd(
+    pgbin: Path,
+    conn_str: str,
+    extensions: list[str] | None = None,
+    tables: list[str] | None = None,
+    schema_only: bool = False,
+    data_only: bool = False,
+    no_owner: bool = False,
+    verbose: bool = False,
+) -> list[str]:
+    pg_dump_cmd = [
+        str(pgbin / "pg_dump"),
+        "-Fc",
+        conn_str,
+    ]
+    if verbose:
+        pg_dump_cmd.append("--verbose")
+    if no_owner:
+        pg_dump_cmd.append("--no-owner")
+    if schema_only:
+        pg_dump_cmd.append("--schema-only")
+    if data_only:
+        pg_dump_cmd.append("--data-only")
+    if extensions:
+        for ext in extensions:
+            pg_dump_cmd.extend(["-e", ext])
+    if tables:
+        for table in tables:
+            pg_dump_cmd.extend(["-t", table])
+    return pg_dump_cmd

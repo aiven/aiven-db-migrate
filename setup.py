@@ -3,8 +3,6 @@
 from importlib.machinery import SourceFileLoader
 from setuptools import find_packages, setup
 
-import sys
-
 
 def get_version():
     return SourceFileLoader("version", "aiven_db_migrate/migrate/version.py").load_module().__version__
@@ -15,14 +13,14 @@ setup(
     author_email="support@aiven.io",
     entry_points={
         "console_scripts": [
-            "pg_migrate = aiven_db_migrate.migrate.pgmigrate:main",
+            "pg_migrate = aiven_db_migrate.migrate.__main__:pg_main",
         ],
     },
     install_requires=[
         "psycopg2",
         "packaging",
     ],
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     license="Apache 2.0",
     name="aiven-db-migrate",
     packages=find_packages(exclude=["test"]),
@@ -36,8 +34,6 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Libraries",
         "License :: OSI Approved :: Apache Software License",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
     ],
 )

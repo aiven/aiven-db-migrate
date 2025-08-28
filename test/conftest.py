@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from _pytest.fixtures import FixtureRequest
 from _pytest.tmpdir import TempPathFactory
-from aiven_db_migrate.migrate.pgmigrate import PGTarget, ReplicationObjectType
+from aiven_db_migrate.migrate.clusters import PGTarget
+from aiven_db_migrate.migrate.models import ReplicationObjectType
 from contextlib import contextmanager
 from copy import copy
 from functools import partial, wraps

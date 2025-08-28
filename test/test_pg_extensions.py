@@ -1,7 +1,8 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 
 from aiven_db_migrate.migrate.errors import PGMigrateValidationFailedError
-from aiven_db_migrate.migrate.pgmigrate import PGDatabase, PGExtension, PGMigrate
+from aiven_db_migrate.migrate.models import PGDatabase, PGExtension, PGMigrateMethod, PGMigrateStatus
+from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from packaging.version import Version
 from test.utils import PGRunner, random_string
 from typing import Tuple
@@ -21,12 +22,14 @@ def test_defaults(pg_source_and_target: Tuple[PGRunner, PGRunner], createdb: boo
             target.create_db(dbname=dbname)
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
 
-    pg_mig.validate()
-    for dbname in dbnames:
-        pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
+    pg_mig.migrate()
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -50,7 +53,11 @@ def test_extension_requires_superuser(pg_source_and_target: Tuple[PGRunner, PGRu
         target.create_db(dbname=dbname)
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:
@@ -74,9 +81,9 @@ def test_migration_succeeds_when_extensions_that_require_superuser_are_excluded(
         target_conn_info=target.conn_info(),
         verbose=True,
         excluded_extensions=",".join(extensions),
+        migrate_method=PGMigrateMethod.dump,
     )
-    assert set(pg_mig.target.excluded_extensions) == extensions
-
+    assert set(pg_mig.excluded_extensions) == extensions
     pg_mig.validate()
 
 
@@ -96,11 +103,10 @@ def test_extension_superuser(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
         source_conn_info=source.super_conn_info(),
         target_conn_info=target.super_conn_info(),
         createdb=createdb,
-        verbose=True
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
-
-    pg_mig.validate()
-    pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
+    pg_mig.migrate()
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -128,12 +134,13 @@ def test_extension_whitelist(pg_source_and_target: Tuple[PGRunner, PGRunner], cr
     target.make_conf(**{"extwlist.extensions": "'{}'".format(",".join(extnames))}).reload()
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump
     )
-
-    pg_mig.validate()
-    for dbname in dbnames:
-        pg_mig._dump_schema(db=PGDatabase(dbname=dbname, tables=set()))  # pylint: disable=protected-access
+    pg_mig.migrate()
 
     # reset databases so that they and installed extensions get queried from server again
     setattr(pg_mig.target, "_databases", {})
@@ -155,18 +162,23 @@ def test_extension_not_available(pg_source_and_target: Tuple[PGRunner, PGRunner]
         target.create_db(dbname=dbname)
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
 
     # mock source databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version="1.2.3")])}
+        {dbname: PGDatabase(dbname=dbname, tables=list(), pg_ext=[PGExtension(name=extname, version="1.2.3")])}
     )
 
-    with pytest.raises(PGMigrateValidationFailedError) as err:
-        pg_mig.validate()
-    assert str(err.value) == f"Extension '{extname}' is not available for installation in target"
+    result = pg_mig.migrate()
+    assert result.validation.status == PGMigrateStatus.failed
+    assert type(result.validation.error) is PGMigrateValidationFailedError
+    assert str(result.validation.error) == f"Extension '{extname}' is not available for installation in target"
 
 
 @pytest.mark.parametrize("createdb", [True, False])
@@ -180,13 +192,17 @@ def test_extension_available_older_version(pg_source_and_target: Tuple[PGRunner,
         target.create_db(dbname=dbname)
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=createdb, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=createdb,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
 
     # mock source databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version="999999")])}
+        {dbname: PGDatabase(dbname=dbname, tables=list(), pg_ext=[PGExtension(name=extname, version="999999")])}
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:
@@ -202,17 +218,21 @@ def test_extension_installed_older_version(pg_source_and_target: Tuple[PGRunner,
     target_ver = "999998"
 
     pg_mig = PGMigrate(
-        source_conn_info=source.conn_info(), target_conn_info=target.conn_info(), createdb=False, verbose=True
+        source_conn_info=source.conn_info(),
+        target_conn_info=target.conn_info(),
+        createdb=False,
+        verbose=True,
+        migrate_method=PGMigrateMethod.dump,
     )
 
     # mock source and target databases
     setattr(
         pg_mig.source, "_databases",
-        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version=source_ver)])}
+        {dbname: PGDatabase(dbname=dbname, tables=list(), pg_ext=[PGExtension(name=extname, version=source_ver)])}
     )
     setattr(
         pg_mig.target, "_databases",
-        {dbname: PGDatabase(dbname=dbname, tables=set(), pg_ext=[PGExtension(name=extname, version=target_ver)])}
+        {dbname: PGDatabase(dbname=dbname, tables=list(), pg_ext=[PGExtension(name=extname, version=target_ver)])}
     )
 
     with pytest.raises(PGMigrateValidationFailedError) as err:

@@ -20,5 +20,14 @@ jobs:
     - name: Install dependencies
       run: pip install -r requirements-dev.txt
 
-    - name: Run checks
-      run: make validate-style
+    - name: Run isort
+      run: python -m isort --check aiven_db_migrate/ test/
+
+    - name: Run yapf
+      run: python -m yapf --diff --recursive aiven_db_migrate/ test/
+
+    - name: Run MyPy
+      run: python -m mypy --config-file mypy.ini aiven_db_migrate/
+
+    - name: Run Pylint
+      run: python -m pylint --rcfile .pylintrc aiven_db_migrate/

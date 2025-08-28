@@ -177,12 +177,11 @@ def test_replicate_filter_with(pg_source_and_target: Tuple[PGRunner, PGRunner], 
     try:
         result = pg_mig.migrate()
         for db in {db_name, other_db_name}:
+            result_dbs = [d for d in result.db_migrate_results if d.dbname == db]
+            assert len(result_dbs) == 1
+            result_db = result_dbs[0]
             assert db in set(pg_mig.target.databases.keys())
-            assert db in result.pg_databases
-            if extras or superuser:
-                assert result.pg_databases[db]["method"] == "replication", result.pg_databases[db]
-            else:
-                assert result.pg_databases[db]["method"] == "dump", result.pg_databases[db]
+            assert result_db.migrate_method == "replication_with_dump_fallback"
         matched_tables: Dict[str, Set] = {db_name: set(), other_db_name: set()}
         desired = {db_name: {'"ta .\'ble0"', '"ta .\'ble1"'}, other_db_name: {'"ta .\'ble2"'}}
         timer = Timer(timeout=30, sleep=1, what="Waiting for data to replicate")

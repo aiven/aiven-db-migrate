@@ -9,13 +9,13 @@ class PGTooMuchDataError(Exception):
     pass
 
 
-class PGSchemaDumpFailedError(Exception):
-    pass
-
-
-class PGDataDumpFailedError(Exception):
-    pass
-
-
 class PGMigrateValidationFailedError(Exception):
+    pass
+
+
+class PGDumpError(Exception):
+    pass
+
+
+class PGRestoreError(Exception):
     pass

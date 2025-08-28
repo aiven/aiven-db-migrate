@@ -1,7 +1,7 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
 from __future__ import annotations
 
-from aiven_db_migrate.migrate.pgmigrate import PGTarget
+from aiven_db_migrate.migrate.clusters import PGTarget
 from aiven_db_migrate.migrate.pgutils import find_pgbin_dir
 from contextlib import contextmanager
 from datetime import datetime
