@@ -1,5 +1,5 @@
 # Copyright (c) 2020 Aiven, Helsinki, Finland. https://aiven.io/
-from aiven_db_migrate.migrate.models import PGMigrateMethod
+from aiven_db_migrate.migrate.models import PGMigrateMethod, PGMigrateStatus, PGRoleStatus
 from aiven_db_migrate.migrate.pgmigrate import PGMigrate
 from aiven_db_migrate.migrate.reports import log_migration_report, save_migration_report
 from pathlib import Path
@@ -193,6 +193,13 @@ def pg_main(args=None, *, prog="pg_migrate"):
         log_migration_report(pg_migrate_report, show_passwords=args.show_passwords)
         if args.report_file:
             save_migration_report(Path(args.report_file), pg_migrate_report)
+        unsuccessful = {PGMigrateStatus.failed, PGMigrateStatus.cancelled}
+        if (
+            (pg_migrate_report.validation and pg_migrate_report.validation.status in unsuccessful)
+            or any(role.status == PGRoleStatus.failed for role in pg_migrate_report.role_migrate_results)
+            or any(db.status in unsuccessful for db in pg_migrate_report.db_migrate_results)
+        ):
+            sys.exit(1)
 
 
 if __name__ == "__main__":
